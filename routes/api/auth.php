@@ -1,16 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\AuthController;
 use Illuminate\Support\Facades\Route;
 
-// Auth routes will be implemented here
-Route::post('/register', function () {
-    return response()->json(['message' => 'Register endpoint']);
-});
+Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login', [AuthController::class, 'login']);
 
-Route::post('/login', function () {
-    return response()->json(['message' => 'Login endpoint']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/me', [AuthController::class, 'me']);
 });
-
-Route::post('/logout', function () {
-    return response()->json(['message' => 'Logout endpoint']);
-})->middleware('auth:sanctum');
