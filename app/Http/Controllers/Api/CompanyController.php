@@ -8,6 +8,7 @@ use App\Http\Requests\JoinCompanyRequest;
 use App\Interfaces\CompanyServiceInterface;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class CompanyController extends Controller
 {
@@ -44,5 +45,39 @@ class CompanyController extends Controller
         );
 
         return $this->success($company, 'Te has unido a la empresa exitosamente');
+    }
+
+    public function show(string $id): JsonResponse
+    {
+        $company = $this->companyService->getCompanyById($id, auth()->id());
+        return $this->success($company, 'Empresa obtenida exitosamente');
+    }
+
+    public function update(Request $request, string $id): JsonResponse
+    {
+        $company = $this->companyService->updateCompany(
+            $id,
+            $request->all(),
+            auth()->id()
+        );
+
+        return $this->success($company, 'Empresa actualizada exitosamente');
+    }
+
+    public function regenerateInvite(string $id): JsonResponse
+    {
+        $result = $this->companyService->regenerateInviteCode($id, auth()->id());
+        return $this->success($result, 'Código de invitación regenerado exitosamente');
+    }
+
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        $this->companyService->deleteCompany(
+            $id,
+            $request->input('deletion_code'),
+            auth()->id()
+        );
+
+        return $this->success(null, 'Empresa eliminada exitosamente');
     }
 }

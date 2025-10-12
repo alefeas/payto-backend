@@ -20,4 +20,7 @@ Route::prefix('v1')->group(function () {
     
     // Company routes
     require base_path('routes/api/companies.php');
+    
+    // Bank account routes
+    require base_path('routes/api/bank_accounts.php');
 });

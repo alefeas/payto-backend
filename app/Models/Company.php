@@ -49,4 +49,19 @@ class Company extends Model
             ->withPivot('role', 'is_active')
             ->withTimestamps();
     }
+
+    public function bankAccounts()
+    {
+        return $this->hasMany(BankAccount::class);
+    }
+
+    public function primaryBankAccount()
+    {
+        return $this->hasOne(BankAccount::class)->where('is_primary', true);
+    }
+
+    public function address()
+    {
+        return $this->hasOne(Address::class);
+    }
 }
