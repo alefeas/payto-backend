@@ -81,6 +81,13 @@ class AuthService implements AuthServiceInterface
         return $user ? $this->formatUserData($user) : null;
     }
 
+    public function updateProfile(string $userId, array $data): array
+    {
+        $user = User::findOrFail($userId);
+        $user->update($data);
+        return $this->formatUserData($user->fresh());
+    }
+
     private function formatUserData(User $user): array
     {
         return [

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
+use App\Http\Requests\UpdateProfileRequest;
 use App\Interfaces\AuthServiceInterface;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
@@ -70,7 +71,23 @@ class AuthController extends Controller
     public function me(Request $request): JsonResponse
     {
         try {
-            return $this->success(['user' => $request->user()]);
+            $user = $request->user();
+            $token = $request->bearerToken();
+            $userData = $this->authService->getCurrentUser($token);
+            return $this->success($userData);
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage(), 500);
+        }
+    }
+
+    public function updateProfile(UpdateProfileRequest $request): JsonResponse
+    {
+        try {
+            $user = $this->authService->updateProfile(
+                $request->user()->id,
+                $request->validated()
+            );
+            return $this->success($user, 'Perfil actualizado correctamente');
         } catch (\Exception $e) {
             return $this->error($e->getMessage(), 500);
         }
