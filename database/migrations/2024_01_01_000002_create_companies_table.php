@@ -10,17 +10,19 @@ return new class extends Migration
     {
         Schema::create('companies', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->string('unique_id', 10)->unique();
+            $table->string('unique_id', 10)->unique()->nullable();
             $table->string('name', 200);
             $table->string('business_name', 200)->nullable();
-            $table->string('tax_id', 15);
-            $table->string('email');
+            $table->string('national_id', 15);
+            $table->string('email')->nullable();
             $table->string('phone', 20)->nullable();
             $table->text('address')->nullable();
             $table->text('logo_url')->nullable();
             $table->boolean('is_active')->default(true);
             $table->boolean('can_issue_invoices')->default(true);
             $table->string('deletion_code', 100);
+            $table->string('invite_code', 50)->unique()->nullable();
+            $table->string('default_role', 50)->default('operator');
             $table->string('tax_regime', 50)->default('registered_taxpayer');
             $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt', 'final_consumer'])->default('registered_taxpayer');
             $table->string('gross_income_number', 20)->nullable();

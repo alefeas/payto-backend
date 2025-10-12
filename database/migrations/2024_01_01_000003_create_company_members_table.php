@@ -13,13 +13,13 @@ return new class extends Migration
             $table->uuid('company_id');
             $table->uuid('user_id');
             $table->enum('role', ['administrator', 'financial_director', 'accountant', 'approver', 'operator']);
-            $table->timestamp('joined_at')->useCurrent();
-            $table->uuid('invited_by')->nullable();
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+            $table->softDeletes();
             
             $table->unique(['company_id', 'user_id']);
             $table->foreign('company_id')->references('id')->on('companies')->onDelete('cascade');
             $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
-            $table->foreign('invited_by')->references('id')->on('users');
         });
     }
 

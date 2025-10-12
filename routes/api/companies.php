@@ -1,24 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\CompanyController;
 use Illuminate\Support\Facades\Route;
 
-// Company routes will be implemented here
-Route::get('/', function () {
-    return response()->json(['message' => 'List companies']);
-});
-
-Route::post('/', function () {
-    return response()->json(['message' => 'Create company']);
-});
-
-Route::get('/{id}', function ($id) {
-    return response()->json(['message' => 'Get company', 'id' => $id]);
-});
-
-Route::put('/{id}', function ($id) {
-    return response()->json(['message' => 'Update company', 'id' => $id]);
-});
-
-Route::delete('/{id}', function ($id) {
-    return response()->json(['message' => 'Delete company', 'id' => $id]);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/companies', [CompanyController::class, 'index']);
+    Route::post('/companies', [CompanyController::class, 'store']);
+    Route::post('/companies/join', [CompanyController::class, 'join']);
 });
