@@ -16,23 +16,20 @@ class Company extends Model
         'business_name',
         'national_id',
         'phone',
-        'address',
         'is_active',
         'deletion_code',
         'invite_code',
+        'unique_id',
         'default_role',
         'tax_condition',
         'default_sales_point',
-        'default_vat',
-        'default_gross_income',
-        'default_income_tax',
+        'last_invoice_number',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
-        'default_vat' => 'decimal:2',
-        'default_gross_income' => 'decimal:2',
-        'default_income_tax' => 'decimal:2',
+        'last_invoice_number' => 'integer',
+        'default_sales_point' => 'integer',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
@@ -63,5 +60,15 @@ class Company extends Model
     public function address()
     {
         return $this->hasOne(Address::class);
+    }
+
+    public function billingSettings()
+    {
+        return $this->hasOne(CompanyBillingSetting::class);
+    }
+
+    public function preferences()
+    {
+        return $this->hasOne(CompanyPreference::class);
     }
 }
