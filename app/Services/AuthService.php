@@ -29,7 +29,8 @@ class AuthService implements AuthServiceInterface
             'apartment' => $data['apartment'] ?? null,
         ]);
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        $tokenName = 'auth_token_' . now()->format('Y-m-d_H:i:s');
+        $token = $user->createToken($tokenName)->plainTextToken;
 
         return [
             'user' => $this->formatUserData($user),
@@ -42,10 +43,14 @@ class AuthService implements AuthServiceInterface
         $user = User::where('email', $credentials['email'])->first();
 
         if (!$user || !Hash::check($credentials['password'], $user->password)) {
-            throw new UnauthorizedException('Invalid credentials');
+            throw new UnauthorizedException('Credenciales inválidas');
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // Revocar tokens anteriores por seguridad
+        $user->tokens()->delete();
+
+        $tokenName = 'auth_token_' . now()->format('Y-m-d_H:i:s');
+        $token = $user->createToken($tokenName)->plainTextToken;
 
         return [
             'user' => $this->formatUserData($user),

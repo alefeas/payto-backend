@@ -24,6 +24,7 @@ class AuthController extends Controller
     public function register(RegisterRequest $request): JsonResponse
     {
         try {
+            \Log::info('Register request data:', $request->all());
             $result = $this->authService->register($request->validated());
             
             return $this->success([

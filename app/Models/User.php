@@ -45,4 +45,16 @@ class User extends Authenticatable
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
+
+    public function companyMembers()
+    {
+        return $this->hasMany(CompanyMember::class);
+    }
+
+    public function companies()
+    {
+        return $this->belongsToMany(Company::class, 'company_members')
+            ->withPivot('role', 'is_active')
+            ->withTimestamps();
+    }
 }
