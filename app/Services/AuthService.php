@@ -2,10 +2,10 @@
 
 namespace App\Services;
 
+use App\Exceptions\UnauthorizedException;
 use App\Interfaces\AuthServiceInterface;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
 class AuthService implements AuthServiceInterface
 {
@@ -42,7 +42,7 @@ class AuthService implements AuthServiceInterface
         $user = User::where('email', $credentials['email'])->first();
 
         if (!$user || !Hash::check($credentials['password'], $user->password)) {
-            throw new \Exception('Invalid credentials');
+            throw new UnauthorizedException('Invalid credentials');
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
