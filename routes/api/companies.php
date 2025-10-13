@@ -20,4 +20,12 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Audit logs routes
     Route::get('/companies/{companyId}/audit-logs', [App\Http\Controllers\Api\AuditLogController::class, 'index']);
+    
+    // AFIP certificate routes
+    Route::get('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'show']);
+    Route::post('/companies/{companyId}/afip/certificate/generate-csr', [App\Http\Controllers\Api\AfipCertificateController::class, 'generateCSR']);
+    Route::post('/companies/{companyId}/afip/certificate/upload', [App\Http\Controllers\Api\AfipCertificateController::class, 'uploadCertificate']);
+    Route::post('/companies/{companyId}/afip/certificate/upload-manual', [App\Http\Controllers\Api\AfipCertificateController::class, 'uploadManual']);
+    Route::post('/companies/{companyId}/afip/certificate/test', [App\Http\Controllers\Api\AfipCertificateController::class, 'testConnection']);
+    Route::delete('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'destroy']);
 });

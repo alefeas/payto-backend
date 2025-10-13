@@ -71,4 +71,9 @@ class Company extends Model
     {
         return $this->hasOne(CompanyPreference::class);
     }
+
+    public function afipCertificate()
+    {
+        return $this->hasOne(CompanyAfipCertificate::class);
+    }
 }
