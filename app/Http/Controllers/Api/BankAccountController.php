@@ -38,7 +38,7 @@ class BankAccountController extends Controller
     {
         $company = Company::whereHas('members', function ($query) {
             $query->where('user_id', auth()->id())
-                  ->where('role', 'administrator')
+                  ->whereIn('role', ['owner', 'administrator'])
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
@@ -82,7 +82,7 @@ class BankAccountController extends Controller
     {
         $company = Company::whereHas('members', function ($query) {
             $query->where('user_id', auth()->id())
-                  ->where('role', 'administrator')
+                  ->whereIn('role', ['owner', 'administrator'])
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
@@ -122,7 +122,7 @@ class BankAccountController extends Controller
     {
         $company = Company::whereHas('members', function ($query) {
             $query->where('user_id', auth()->id())
-                  ->where('role', 'administrator')
+                  ->whereIn('role', ['owner', 'administrator'])
                   ->where('is_active', true);
         })->findOrFail($companyId);
 

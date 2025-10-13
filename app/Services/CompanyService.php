@@ -15,6 +15,12 @@ use Illuminate\Support\Facades\Hash;
 
 class CompanyService implements CompanyServiceInterface
 {
+    private AuditService $auditService;
+
+    public function __construct(AuditService $auditService)
+    {
+        $this->auditService = $auditService;
+    }
     public function createCompany(array $data, string $userId): array
     {
         $company = Company::create([
@@ -51,9 +57,18 @@ class CompanyService implements CompanyServiceInterface
         CompanyMember::create([
             'company_id' => $company->id,
             'user_id' => $userId,
-            'role' => 'administrator',
+            'role' => 'owner',
             'is_active' => true,
         ]);
+
+        $this->auditService->log(
+            $company->id,
+            $userId,
+            'company.created',
+            "Empresa {$company->name} creada",
+            'Company',
+            $company->id
+        );
 
         return $this->formatCompanyData($company);
     }
@@ -82,6 +97,15 @@ class CompanyService implements CompanyServiceInterface
             'role' => $company->default_role ?? 'operator',
             'is_active' => true,
         ]);
+
+        $this->auditService->log(
+            $company->id,
+            $userId,
+            'member.joined',
+            "Nuevo miembro se unió a la empresa",
+            'CompanyMember',
+            null
+        );
 
         return $this->formatCompanyData($company);
     }
@@ -127,7 +151,7 @@ class CompanyService implements CompanyServiceInterface
     {
         $company = Company::whereHas('members', function ($query) use ($userId) {
             $query->where('user_id', $userId)
-                  ->where('role', 'administrator')
+                  ->whereIn('role', ['owner', 'administrator'])
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
@@ -176,6 +200,16 @@ class CompanyService implements CompanyServiceInterface
         $company->update($updateData);
         $company->refresh();
 
+        $this->auditService->log(
+            $companyId,
+            $userId,
+            'company.updated',
+            "Configuración de la empresa actualizada",
+            'Company',
+            $companyId,
+            ['updated_fields' => array_keys($data)]
+        );
+
         return $this->formatCompanyData($company->load(['members' => function ($query) use ($userId) {
             $query->where('user_id', $userId);
         }, 'address', 'billingSettings']));
@@ -185,13 +219,22 @@ class CompanyService implements CompanyServiceInterface
     {
         $company = Company::whereHas('members', function ($query) use ($userId) {
             $query->where('user_id', $userId)
-                  ->where('role', 'administrator')
+                  ->whereIn('role', ['owner', 'administrator'])
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
         $company->update([
             'invite_code' => strtoupper(Str::random(10)),
         ]);
+
+        $this->auditService->log(
+            $companyId,
+            $userId,
+            'company.invite_code_regenerated',
+            "Código de invitación regenerado",
+            'Company',
+            $companyId
+        );
 
         return [
             'inviteCode' => $company->invite_code,
@@ -202,13 +245,22 @@ class CompanyService implements CompanyServiceInterface
     {
         $company = Company::whereHas('members', function ($query) use ($userId) {
             $query->where('user_id', $userId)
-                  ->where('role', 'administrator')
+                  ->where('role', 'owner')
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
         if (!Hash::check($deletionCode, $company->deletion_code)) {
             throw new BadRequestException('Código de eliminación incorrecto');
         }
+
+        $this->auditService->log(
+            $companyId,
+            $userId,
+            'company.deleted',
+            "Empresa {$company->name} eliminada permanentemente",
+            'Company',
+            $companyId
+        );
 
         $company->delete();
         return true;
@@ -238,14 +290,14 @@ class CompanyService implements CompanyServiceInterface
             'taxCondition' => $company->tax_condition,
             'defaultSalesPoint' => $company->default_sales_point,
             'lastInvoiceNumber' => $company->last_invoice_number,
-            'defaultVat' => $billing->default_vat ?? 21,
-            'vatPerception' => $billing->vat_perception ?? 0,
-            'grossIncomePerception' => $billing->gross_income_perception ?? 2.5,
-            'socialSecurityPerception' => $billing->social_security_perception ?? 1,
-            'vatRetention' => $billing->vat_retention ?? 0,
-            'incomeTaxRetention' => $billing->income_tax_retention ?? 2,
-            'grossIncomeRetention' => $billing->gross_income_retention ?? 0.42,
-            'socialSecurityRetention' => $billing->social_security_retention ?? 0,
+            'defaultVat' => $billing?->default_vat ?? 21,
+            'vatPerception' => $billing?->vat_perception ?? 0,
+            'grossIncomePerception' => $billing?->gross_income_perception ?? 2.5,
+            'socialSecurityPerception' => $billing?->social_security_perception ?? 1,
+            'vatRetention' => $billing?->vat_retention ?? 0,
+            'incomeTaxRetention' => $billing?->income_tax_retention ?? 2,
+            'grossIncomeRetention' => $billing?->gross_income_retention ?? 0.42,
+            'socialSecurityRetention' => $billing?->social_security_retention ?? 0,
             'isActive' => $company->is_active,
             'uniqueId' => $company->unique_id,
             'inviteCode' => $company->invite_code,

@@ -57,4 +57,9 @@ class User extends Authenticatable
             ->withPivot('role', 'is_active')
             ->withTimestamps();
     }
+
+    public function getNameAttribute(): string
+    {
+        return trim("{$this->first_name} {$this->last_name}") ?: $this->email;
+    }
 }

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\CompanyController;
+use App\Http\Controllers\Api\CompanyMemberController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -11,4 +12,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/companies/{id}', [CompanyController::class, 'update']);
     Route::post('/companies/{id}/regenerate-invite', [CompanyController::class, 'regenerateInvite']);
     Route::delete('/companies/{id}', [CompanyController::class, 'destroy']);
+    
+    // Company members routes
+    Route::get('/companies/{companyId}/members', [CompanyMemberController::class, 'index']);
+    Route::put('/companies/{companyId}/members/{memberId}/role', [CompanyMemberController::class, 'updateRole']);
+    Route::delete('/companies/{companyId}/members/{memberId}', [CompanyMemberController::class, 'destroy']);
+    
+    // Audit logs routes
+    Route::get('/companies/{companyId}/audit-logs', [App\Http\Controllers\Api\AuditLogController::class, 'index']);
 });

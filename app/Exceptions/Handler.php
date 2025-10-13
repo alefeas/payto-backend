@@ -51,6 +51,34 @@ class Handler extends ExceptionHandler
             ], 401);
         }
 
+        if ($e instanceof UnauthorizedException) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 401);
+        }
+
+        if ($e instanceof ForbiddenException) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 403);
+        }
+
+        if ($e instanceof BadRequestException) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 400);
+        }
+
+        if ($e instanceof NotFoundException) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 404);
+        }
+
         if ($e instanceof ModelNotFoundException) {
             return response()->json([
                 'success' => false,
