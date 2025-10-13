@@ -51,13 +51,17 @@ class InvoiceController extends Controller
         try {
             DB::beginTransaction();
 
+            // Get last invoice number from database
             $lastInvoice = Invoice::where('issuer_company_id', $companyId)
                 ->where('type', $validated['invoice_type'])
                 ->where('sales_point', $validated['sales_point'])
                 ->orderBy('voucher_number', 'desc')
                 ->first();
 
-            $voucherNumber = $lastInvoice ? $lastInvoice->voucher_number + 1 : 1;
+            // Use the higher value between DB and company's last_invoice_number
+            $lastFromDb = $lastInvoice ? $lastInvoice->voucher_number : 0;
+            $lastFromCompany = $company->last_invoice_number ?? 0;
+            $voucherNumber = max($lastFromDb, $lastFromCompany) + 1;
 
             $subtotal = 0;
             $totalTaxes = 0;
@@ -91,6 +95,8 @@ class InvoiceController extends Controller
                 'notes' => $validated['notes'] ?? null,
                 'status' => 'pending_approval',
                 'afip_status' => 'pending',
+                'approvals_required' => 0, // Set based on company settings
+                'approvals_received' => 0,
                 'created_by' => auth()->id(),
             ]);
 
@@ -110,8 +116,11 @@ class InvoiceController extends Controller
                 ]);
             }
 
+            // Auto-authorize with AFIP if certificate is configured
             if ($company->afipCertificate && $company->afipCertificate->is_active) {
                 try {
+                    $invoice->update(['afip_status' => 'processing']);
+                    
                     $afipService = new AfipInvoiceService($company);
                     $afipResult = $afipService->authorizeInvoice($invoice);
                     
@@ -132,9 +141,12 @@ class InvoiceController extends Controller
                         'afip_error_message' => $e->getMessage(),
                         'afip_status' => 'error',
                         'status' => 'rejected',
+                        'rejection_reason' => 'AFIP: ' . $e->getMessage(),
+                        'rejected_at' => now(),
                     ]);
                 }
             } else {
+                // Simulated CAE for testing without AFIP
                 $invoice->update([
                     'afip_cae' => 'SIM-' . str_pad($voucherNumber, 10, '0', STR_PAD_LEFT),
                     'afip_cae_due_date' => now()->addDays(10),
@@ -142,6 +154,11 @@ class InvoiceController extends Controller
                     'status' => 'issued',
                 ]);
             }
+
+            // Update company's last invoice number
+            $company->update([
+                'last_invoice_number' => $voucherNumber
+            ]);
 
             DB::commit();
 
@@ -182,9 +199,17 @@ class InvoiceController extends Controller
 
         $this->authorize('delete', $invoice);
 
-        if ($invoice->status === 'issued' && $invoice->hasValidCae()) {
+        // Only allow deletion of drafts, pending approval, or rejected invoices
+        if (in_array($invoice->status, ['issued', 'approved', 'paid'])) {
             return response()->json([
-                'message' => 'Cannot delete issued invoice with valid CAE',
+                'message' => 'Cannot delete issued invoices. Use credit notes to cancel them.',
+                'suggestion' => 'Create a credit note (Nota de Crédito) to cancel this invoice.',
+            ], 422);
+        }
+
+        if ($invoice->afip_cae && !str_starts_with($invoice->afip_cae, 'SIM-')) {
+            return response()->json([
+                'message' => 'Cannot delete invoice with real AFIP CAE. Use credit notes to cancel.',
             ], 422);
         }
 
@@ -192,6 +217,29 @@ class InvoiceController extends Controller
 
         return response()->json([
             'message' => 'Invoice deleted successfully',
+        ]);
+    }
+
+    public function cancel($companyId, $id)
+    {
+        $invoice = Invoice::where('issuer_company_id', $companyId)->findOrFail($id);
+
+        $this->authorize('delete', $invoice);
+
+        if ($invoice->status === 'cancelled') {
+            return response()->json([
+                'message' => 'Invoice is already cancelled',
+            ], 422);
+        }
+
+        // Mark as cancelled instead of deleting
+        $invoice->update([
+            'status' => 'cancelled',
+        ]);
+
+        return response()->json([
+            'message' => 'Invoice cancelled successfully',
+            'note' => 'To legally cancel this invoice, you should issue a credit note.',
         ]);
     }
 }
