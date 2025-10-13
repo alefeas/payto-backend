@@ -32,17 +32,12 @@ class AuditService
     public function getCompanyLogs(string $companyId, int $perPage = 50): array
     {
         $logs = AuditLog::where('company_id', $companyId)
-            ->with('user:id,name,email')
+            ->with('user:id,first_name,last_name,email')
             ->orderBy('created_at', 'desc')
             ->paginate($perPage);
 
         return [
-            'data' => $logs->items()->map(function ($log) {
-                $userName = trim("{$log->user->first_name} {$log->user->last_name}");
-                if (empty($userName)) {
-                    $userName = $log->user->email;
-                }
-
+            'data' => $logs->map(function ($log) {
                 return [
                     'id' => $log->id,
                     'companyId' => $log->company_id,
@@ -57,7 +52,7 @@ class AuditService
                     'createdAt' => $log->created_at->toIso8601String(),
                     'user' => [
                         'id' => $log->user->id,
-                        'name' => $userName,
+                        'name' => $log->user->name,
                         'email' => $log->user->email,
                     ]
                 ];
