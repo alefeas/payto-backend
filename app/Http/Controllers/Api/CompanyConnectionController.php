@@ -6,14 +6,18 @@ use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\CompanyConnection;
 use App\Models\Invoice;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class CompanyConnectionController extends Controller
 {
+    use AuthorizesRequests;
+
     public function index($companyId)
     {
         $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [CompanyConnection::class, $company]);
         
         $connections = CompanyConnection::where(function($query) use ($companyId) {
             $query->where('company_id', $companyId)
@@ -78,6 +82,7 @@ class CompanyConnectionController extends Controller
     public function pendingRequests($companyId)
     {
         $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [CompanyConnection::class, $company]);
         
         $requests = CompanyConnection::where('connected_company_id', $companyId)
             ->where('status', 'pending')
@@ -100,14 +105,42 @@ class CompanyConnectionController extends Controller
         return response()->json($requests);
     }
 
+    public function sentRequests($companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [CompanyConnection::class, $company]);
+        
+        $requests = CompanyConnection::where('company_id', $companyId)
+            ->where('status', 'pending')
+            ->with(['connectedCompany', 'requestedByUser'])
+            ->get()
+            ->map(function($connection) {
+                return [
+                    'id' => $connection->id,
+                    'fromCompanyId' => $connection->company_id,
+                    'fromCompanyName' => $connection->company->name,
+                    'fromCompanyUniqueId' => $connection->company->unique_id,
+                    'toCompanyId' => $connection->connected_company_id,
+                    'toCompanyName' => $connection->connectedCompany->name,
+                    'message' => $connection->message,
+                    'requestedAt' => $connection->created_at,
+                    'requestedBy' => $connection->requestedByUser->email,
+                ];
+            });
+
+        return response()->json($requests);
+    }
+
     public function store(Request $request, $companyId)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('create', [CompanyConnection::class, $company]);
+
         $validated = $request->validate([
             'company_unique_id' => 'required|string|exists:companies,unique_id',
             'message' => 'nullable|string|max:500',
         ]);
 
-        $company = Company::findOrFail($companyId);
         $targetCompany = Company::where('unique_id', $validated['company_unique_id'])->firstOrFail();
 
         if ($targetCompany->id === $companyId) {
@@ -123,7 +156,11 @@ class CompanyConnectionController extends Controller
         })->first();
 
         if ($existing) {
-            return response()->json(['message' => 'Ya existe una conexión con esta empresa'], 422);
+            if ($existing->status === 'connected') {
+                return response()->json(['message' => 'Ya tienes una conexión establecida con esta empresa'], 422);
+            } else if ($existing->status === 'pending') {
+                return response()->json(['message' => 'Ya existe una solicitud pendiente con esta empresa'], 422);
+            }
         }
 
         $connection = CompanyConnection::create([
@@ -142,6 +179,9 @@ class CompanyConnectionController extends Controller
 
     public function accept(Request $request, $companyId, $connectionId)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('manage', [CompanyConnection::class, $company]);
+
         $connection = CompanyConnection::findOrFail($connectionId);
 
         if ($connection->connected_company_id !== $companyId) {
@@ -165,6 +205,9 @@ class CompanyConnectionController extends Controller
 
     public function reject(Request $request, $companyId, $connectionId)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('manage', [CompanyConnection::class, $company]);
+
         $connection = CompanyConnection::findOrFail($connectionId);
 
         if ($connection->connected_company_id !== $companyId) {
@@ -183,6 +226,7 @@ class CompanyConnectionController extends Controller
     public function stats($companyId)
     {
         $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [CompanyConnection::class, $company]);
         
         $totalConnections = CompanyConnection::where(function($query) use ($companyId) {
             $query->where('company_id', $companyId)
@@ -195,9 +239,14 @@ class CompanyConnectionController extends Controller
             ->where('status', 'pending')
             ->count();
 
+        $pendingSent = CompanyConnection::where('company_id', $companyId)
+            ->where('status', 'pending')
+            ->count();
+
         return response()->json([
             'totalConnections' => $totalConnections,
             'pendingReceived' => $pendingReceived,
+            'pendingSent' => $pendingSent,
         ]);
     }
 }

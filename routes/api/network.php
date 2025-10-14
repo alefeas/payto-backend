@@ -8,6 +8,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/', [CompanyConnectionController::class, 'index']);
         Route::get('/stats', [CompanyConnectionController::class, 'stats']);
         Route::get('/requests', [CompanyConnectionController::class, 'pendingRequests']);
+        Route::get('/sent', [CompanyConnectionController::class, 'sentRequests']);
         Route::post('/connect', [CompanyConnectionController::class, 'store']);
         Route::post('/requests/{connectionId}/accept', [CompanyConnectionController::class, 'accept']);
         Route::post('/requests/{connectionId}/reject', [CompanyConnectionController::class, 'reject']);

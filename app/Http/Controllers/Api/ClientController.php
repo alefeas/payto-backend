@@ -6,20 +6,18 @@ use App\Http\Controllers\Controller;
 use App\Models\Client;
 use App\Models\Company;
 use App\Traits\ApiResponse;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
-    use ApiResponse;
+    use ApiResponse, AuthorizesRequests;
 
     public function index(string $companyId): JsonResponse
     {
-        $company = Company::where('id', $companyId)
-            ->whereHas('members', function ($query) {
-                $query->where('user_id', auth()->id())
-                      ->where('is_active', true);
-            })->firstOrFail();
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [Client::class, $company]);
 
         $clients = Client::where('company_id', $companyId)
             ->orderBy('created_at', 'desc')
@@ -30,12 +28,8 @@ class ClientController extends Controller
 
     public function store(Request $request, string $companyId): JsonResponse
     {
-        $company = Company::where('id', $companyId)
-            ->whereHas('members', function ($query) {
-                $query->where('user_id', auth()->id())
-                      ->whereIn('role', ['owner', 'administrator', 'financial_director', 'accountant'])
-                      ->where('is_active', true);
-            })->firstOrFail();
+        $company = Company::findOrFail($companyId);
+        $this->authorize('create', [Client::class, $company]);
 
         $validated = $request->validate([
             'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
@@ -68,12 +62,8 @@ class ClientController extends Controller
 
     public function update(Request $request, string $companyId, string $clientId): JsonResponse
     {
-        $company = Company::where('id', $companyId)
-            ->whereHas('members', function ($query) {
-                $query->where('user_id', auth()->id())
-                      ->whereIn('role', ['owner', 'administrator', 'financial_director', 'accountant'])
-                      ->where('is_active', true);
-            })->firstOrFail();
+        $company = Company::findOrFail($companyId);
+        $this->authorize('update', [Client::class, $company]);
 
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
@@ -108,12 +98,8 @@ class ClientController extends Controller
 
     public function destroy(string $companyId, string $clientId): JsonResponse
     {
-        $company = Company::where('id', $companyId)
-            ->whereHas('members', function ($query) {
-                $query->where('user_id', auth()->id())
-                      ->whereIn('role', ['owner', 'administrator', 'financial_director'])
-                      ->where('is_active', true);
-            })->firstOrFail();
+        $company = Company::findOrFail($companyId);
+        $this->authorize('delete', [Client::class, $company]);
 
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
