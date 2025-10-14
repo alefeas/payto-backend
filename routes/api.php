@@ -26,4 +26,7 @@ Route::prefix('v1')->group(function () {
     
     // Network routes
     require base_path('routes/api/network.php');
+    
+    // Tasks routes
+    require base_path('routes/api/tasks.php');
 });
