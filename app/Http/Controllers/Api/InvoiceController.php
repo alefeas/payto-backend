@@ -9,9 +9,11 @@ use App\Services\Afip\AfipInvoiceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 
 class InvoiceController extends Controller
 {
+    use AuthorizesRequests;
     public function index(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
@@ -133,10 +135,9 @@ class InvoiceController extends Controller
                 'created_by' => auth()->id(),
             ]);
 
-            foreach ($validated['items'] as $item) {
+            foreach ($validated['items'] as $index => $item) {
                 $itemSubtotal = $item['quantity'] * $item['unit_price'];
                 $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
-                $itemTotal = $itemSubtotal + $itemTax;
 
                 $invoice->items()->create([
                     'description' => $item['description'],
@@ -145,7 +146,7 @@ class InvoiceController extends Controller
                     'tax_rate' => $item['tax_rate'],
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
-                    'total' => $itemTotal,
+                    'order_index' => $index,
                 ]);
             }
 
@@ -338,6 +339,125 @@ class InvoiceController extends Controller
     {
         $types = ['A' => 1, 'B' => 6, 'C' => 11, 'E' => 19];
         return $types[$type] ?? 6;
+    }
+
+    public function storeReceived(Request $request, $companyId)
+    {
+        $company = Company::findOrFail($companyId);
+
+        $validated = $request->validate([
+            'issuer_cuit' => 'required|string',
+            'issuer_business_name' => 'required|string',
+            'invoice_type' => 'required|in:A,B,C,E',
+            'invoice_number' => 'required|string',
+            'issue_date' => 'required|date',
+            'due_date' => 'required|date',
+            'currency' => 'required|string|size:3',
+            'exchange_rate' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string',
+            'items' => 'required|array|min:1',
+            'items.*.description' => 'required|string',
+            'items.*.quantity' => 'required|numeric|min:0.01',
+            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.tax_rate' => 'required|numeric|min:0|max:100',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Crear cliente que representa al proveedor
+            $client = \App\Models\Client::firstOrCreate(
+                [
+                    'company_id' => $companyId,
+                    'document_number' => preg_replace('/[^0-9]/', '', $validated['issuer_cuit']),
+                ],
+                [
+                    'document_type' => 'CUIT',
+                    'business_name' => $validated['issuer_business_name'],
+                    'tax_condition' => 'registered_taxpayer',
+                ]
+            );
+
+            // Calcular totales
+            $subtotal = 0;
+            $totalTaxes = 0;
+            foreach ($validated['items'] as $item) {
+                $itemSubtotal = $item['quantity'] * $item['unit_price'];
+                $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+                $subtotal += $itemSubtotal;
+                $totalTaxes += $itemTax;
+            }
+            $total = $subtotal + $totalTaxes;
+
+            // Generar voucher_number único para facturas recibidas
+            $lastReceived = Invoice::where('receiver_company_id', $companyId)
+                ->where('issuer_company_id', $companyId)
+                ->orderBy('voucher_number', 'desc')
+                ->first();
+            $voucherNumber = $lastReceived ? $lastReceived->voucher_number + 1 : 1;
+
+            // Crear factura recibida (el proveedor es el emisor, tu empresa es el receptor)
+            $invoice = Invoice::create([
+                'number' => $validated['invoice_number'],
+                'type' => $validated['invoice_type'],
+                'sales_point' => 9999, // Punto de venta especial para facturas recibidas
+                'voucher_number' => $voucherNumber,
+                'concept' => 'products',
+                'issuer_company_id' => $companyId, // Usar companyId para cumplir unique constraint
+                'receiver_company_id' => $companyId, // Tu empresa recibe la factura
+                'client_id' => $client->id, // El proveedor
+                'issue_date' => $validated['issue_date'],
+                'due_date' => $validated['due_date'],
+                'subtotal' => $subtotal,
+                'total_taxes' => $totalTaxes,
+                'total_perceptions' => 0,
+                'total' => $total,
+                'currency' => $validated['currency'],
+                'exchange_rate' => $validated['exchange_rate'] ?? 1,
+                'notes' => $validated['notes'] ?? null,
+                'status' => 'issued',
+                'afip_status' => 'approved',
+                'approvals_required' => 0,
+                'approvals_received' => 0,
+                'created_by' => auth()->id(),
+            ]);
+
+            // Crear items
+            foreach ($validated['items'] as $index => $item) {
+                $itemSubtotal = $item['quantity'] * $item['unit_price'];
+                $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+
+                $invoice->items()->create([
+                    'description' => $item['description'],
+                    'quantity' => $item['quantity'],
+                    'unit_price' => $item['unit_price'],
+                    'tax_rate' => $item['tax_rate'],
+                    'tax_amount' => $itemTax,
+                    'subtotal' => $itemSubtotal,
+                    'order_index' => $index,
+                ]);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Received invoice created successfully',
+                'invoice' => $invoice->load(['client', 'items']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Received invoice creation failed', [
+                'company_id' => $companyId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to create received invoice',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function uploadAttachment(Request $request, $companyId, $id)

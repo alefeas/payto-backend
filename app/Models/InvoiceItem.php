@@ -2,11 +2,16 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class InvoiceItem extends Model
 {
+    use HasUuids;
+    
+    public $timestamps = false;
+    
     protected $fillable = [
         'invoice_id',
         'description',
@@ -15,16 +20,16 @@ class InvoiceItem extends Model
         'tax_rate',
         'tax_amount',
         'subtotal',
-        'total',
+        'order_index',
     ];
 
     protected $casts = [
-        'quantity' => 'decimal:2',
+        'quantity' => 'decimal:3',
         'unit_price' => 'decimal:2',
         'tax_rate' => 'decimal:2',
         'tax_amount' => 'decimal:2',
         'subtotal' => 'decimal:2',
-        'total' => 'decimal:2',
+        'order_index' => 'integer',
     ];
 
     public function invoice(): BelongsTo
