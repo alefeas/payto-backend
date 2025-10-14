@@ -28,4 +28,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/companies/{companyId}/afip/certificate/upload-manual', [App\Http\Controllers\Api\AfipCertificateController::class, 'uploadManual']);
     Route::post('/companies/{companyId}/afip/certificate/test', [App\Http\Controllers\Api\AfipCertificateController::class, 'testConnection']);
     Route::delete('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'destroy']);
+    
+    // Client routes
+    Route::get('/companies/{companyId}/clients', [App\Http\Controllers\Api\ClientController::class, 'index']);
+    Route::post('/companies/{companyId}/clients', [App\Http\Controllers\Api\ClientController::class, 'store']);
+    Route::put('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'update']);
+    Route::delete('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'destroy']);
 });

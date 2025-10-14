@@ -33,7 +33,16 @@ class InvoiceController extends Controller
         $this->authorize('create', [Invoice::class, $company]);
 
         $validated = $request->validate([
-            'client_id' => 'required|exists:clients,id',
+            'client_id' => 'required_without:client_data|exists:clients,id',
+            'client_data' => 'required_without:client_id|array',
+            'client_data.document_type' => 'required_with:client_data|in:CUIT,CUIL,DNI,Pasaporte,CDI',
+            'client_data.document_number' => 'required_with:client_data|string',
+            'client_data.business_name' => 'nullable|string',
+            'client_data.first_name' => 'nullable|string',
+            'client_data.last_name' => 'nullable|string',
+            'client_data.email' => 'nullable|email',
+            'client_data.tax_condition' => 'required_with:client_data|in:registered_taxpayer,monotax,exempt,final_consumer',
+            'save_client' => 'boolean',
             'invoice_type' => 'required|in:A,B,C,E',
             'sales_point' => 'required|integer|min:1|max:9999',
             'issue_date' => 'required|date',
@@ -50,6 +59,15 @@ class InvoiceController extends Controller
 
         try {
             DB::beginTransaction();
+
+            // Create client if client_data is provided
+            if (!isset($validated['client_id']) && isset($validated['client_data'])) {
+                $client = \App\Models\Client::create([
+                    'company_id' => $companyId,
+                    ...$validated['client_data']
+                ]);
+                $validated['client_id'] = $client->id;
+            }
 
             // Get last invoice number from database
             $lastInvoice = Invoice::where('issuer_company_id', $companyId)
@@ -119,8 +137,6 @@ class InvoiceController extends Controller
             // Auto-authorize with AFIP if certificate is configured
             if ($company->afipCertificate && $company->afipCertificate->is_active) {
                 try {
-                    $invoice->update(['afip_status' => 'processing']);
-                    
                     $afipService = new AfipInvoiceService($company);
                     $afipResult = $afipService->authorizeInvoice($invoice);
                     
@@ -132,18 +148,18 @@ class InvoiceController extends Controller
                         'afip_sent_at' => now(),
                     ]);
                 } catch (\Exception $e) {
-                    Log::error('AFIP authorization failed', [
-                        'invoice_id' => $invoice->id,
+                    DB::rollBack();
+                    
+                    Log::error('AFIP authorization failed - Invoice not created', [
+                        'company_id' => $companyId,
+                        'voucher_number' => $voucherNumber,
                         'error' => $e->getMessage(),
                     ]);
                     
-                    $invoice->update([
-                        'afip_error_message' => $e->getMessage(),
-                        'afip_status' => 'error',
-                        'status' => 'rejected',
-                        'rejection_reason' => 'AFIP: ' . $e->getMessage(),
-                        'rejected_at' => now(),
-                    ]);
+                    return response()->json([
+                        'message' => 'AFIP rechazó la factura',
+                        'error' => $e->getMessage(),
+                    ], 422);
                 }
             } else {
                 // Simulated CAE for testing without AFIP

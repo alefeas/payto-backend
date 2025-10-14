@@ -4,12 +4,10 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Client extends Model
 {
-    use HasUuids, SoftDeletes;
+    use HasUuids;
 
     protected $fillable = [
         'company_id',
@@ -22,30 +20,20 @@ class Client extends Model
         'phone',
         'address',
         'tax_condition',
-        'is_company_connection',
-        'connected_company_id',
     ];
 
     protected $casts = [
-        'is_company_connection' => 'boolean',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
 
-    public function company(): BelongsTo
+    public function company()
     {
         return $this->belongsTo(Company::class);
     }
 
-    public function connectedCompany(): BelongsTo
+    public function invoices()
     {
-        return $this->belongsTo(Company::class, 'connected_company_id');
-    }
-
-    public function getFullNameAttribute(): string
-    {
-        if ($this->business_name) {
-            return $this->business_name;
-        }
-        
-        return trim("{$this->first_name} {$this->last_name}");
+        return $this->hasMany(Invoice::class);
     }
 }
