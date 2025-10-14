@@ -130,10 +130,11 @@ class AfipInvoiceService
                     'ImpNeto' => $netAmount,
                     'ImpOpEx' => $exemptAmount,
                     'ImpIVA' => $taxAmount,
-                    'ImpTrib' => 0,
+                    'ImpTrib' => $invoice->total_perceptions,
                     'MonId' => 'PES',
                     'MonCotiz' => 1,
                     'Iva' => $this->buildIvaArray($invoice),
+                    'Tributos' => $this->buildTributosArray($invoice),
                 ],
             ],
         ];
@@ -199,6 +200,97 @@ class AfipInvoiceService
                 ],
             ],
         ];
+    }
+
+    /**
+     * Build Tributos (perceptions) array for AFIP request
+     */
+    private function buildTributosArray(Invoice $invoice): ?array
+    {
+        if ($invoice->total_perceptions <= 0) {
+            return null;
+        }
+
+        $tributos = [];
+        foreach ($invoice->perceptions as $perception) {
+            $tributos[] = [
+                'Id' => $this->getAfipTributoId($perception->type),
+                'Desc' => $perception->name,
+                'BaseImp' => $perception->base_amount,
+                'Alic' => $perception->rate,
+                'Importe' => $perception->amount,
+            ];
+        }
+
+        return ['Tributo' => $tributos];
+    }
+
+    /**
+     * Get AFIP tributo ID for perception type
+     */
+    private function getAfipTributoId(string $type): int
+    {
+        $types = [
+            'vat_perception' => 1, // Percepción IVA
+            'gross_income_perception' => 2, // Percepción IIBB
+            'suss_perception' => 6, // Percepción SUSS
+        ];
+
+        return $types[$type] ?? 99; // 99 = Otros
+    }
+
+    /**
+     * Consult invoice from AFIP by CAE or invoice number
+     */
+    public function consultInvoice(string $issuerCuit, int $invoiceType, int $salesPoint, int $voucherNumber): array
+    {
+        try {
+            $soapClient = $this->client->getWSFEClient();
+            $auth = $this->client->getAuthArray();
+
+            $response = $soapClient->FECompConsultar([
+                'Auth' => $auth,
+                'FeCompConsReq' => [
+                    'CbteTipo' => $invoiceType,
+                    'CbteNro' => $voucherNumber,
+                    'PtoVta' => $salesPoint,
+                ],
+            ]);
+
+            $result = $response->FECompConsultarResult;
+
+            if (isset($result->Errors) && $result->Errors) {
+                throw new \Exception('Invoice not found in AFIP');
+            }
+
+            $invoice = $result->ResultGet;
+
+            return [
+                'found' => true,
+                'cae' => $invoice->CodAutorizacion ?? null,
+                'cae_expiration' => isset($invoice->FchVto) ? Carbon::createFromFormat('Ymd', $invoice->FchVto)->format('Y-m-d') : null,
+                'issue_date' => isset($invoice->CbteFch) ? Carbon::createFromFormat('Ymd', $invoice->CbteFch)->format('Y-m-d') : null,
+                'doc_type' => $invoice->DocTipo ?? null,
+                'doc_number' => $invoice->DocNro ?? null,
+                'subtotal' => $invoice->ImpNeto ?? 0,
+                'total_taxes' => $invoice->ImpIVA ?? 0,
+                'total_perceptions' => $invoice->ImpTrib ?? 0,
+                'total' => $invoice->ImpTotal ?? 0,
+                'currency' => $invoice->MonId ?? 'PES',
+                'exchange_rate' => $invoice->MonCotiz ?? 1,
+                'result' => $invoice->Resultado ?? null,
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to consult invoice from AFIP', [
+                'issuer_cuit' => $issuerCuit,
+                'invoice_type' => $invoiceType,
+                'sales_point' => $salesPoint,
+                'voucher_number' => $voucherNumber,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
     }
 
     /**

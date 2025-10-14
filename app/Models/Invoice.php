@@ -51,6 +51,8 @@ class Invoice extends Model
         'afip_status',
         'afip_error_message',
         'afip_sent_at',
+        'attachment_path',
+        'attachment_original_name',
         'created_by',
     ];
 
@@ -101,6 +103,32 @@ class Invoice extends Model
     public function perceptions(): HasMany
     {
         return $this->hasMany(InvoicePerception::class);
+    }
+
+    public function payments(): HasMany
+    {
+        return $this->hasMany(InvoicePayment::class);
+    }
+
+    public function getTotalPaidAttribute(): float
+    {
+        return $this->payments()->sum('amount');
+    }
+
+    public function getRemainingAmountAttribute(): float
+    {
+        return $this->total - $this->getTotalPaidAttribute();
+    }
+
+    public function isPaid(): bool
+    {
+        return $this->getRemainingAmountAttribute() <= 0;
+    }
+
+    public function isPartiallyPaid(): bool
+    {
+        $totalPaid = $this->getTotalPaidAttribute();
+        return $totalPaid > 0 && $totalPaid < $this->total;
     }
 
     public function hasValidCae(): bool

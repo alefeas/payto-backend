@@ -55,6 +55,10 @@ class InvoiceController extends Controller
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.tax_rate' => 'required|numeric|min:0|max:100',
+            'perceptions' => 'nullable|array',
+            'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,suss_perception',
+            'perceptions.*.name' => 'required|string',
+            'perceptions.*.rate' => 'required|numeric|min:0|max:100',
         ]);
 
         try {
@@ -92,7 +96,18 @@ class InvoiceController extends Controller
                 $totalTaxes += $itemTax;
             }
 
-            $total = $subtotal + $totalTaxes;
+            // Calculate perceptions
+            $totalPerceptions = 0;
+            if (isset($validated['perceptions'])) {
+                foreach ($validated['perceptions'] as $perception) {
+                    $baseAmount = $perception['type'] === 'vat_perception' 
+                        ? $totalTaxes 
+                        : ($subtotal + $totalTaxes);
+                    $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
+                }
+            }
+
+            $total = $subtotal + $totalTaxes + $totalPerceptions;
 
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
@@ -106,7 +121,7 @@ class InvoiceController extends Controller
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),
                 'subtotal' => $subtotal,
                 'total_taxes' => $totalTaxes,
-                'total_perceptions' => 0,
+                'total_perceptions' => $totalPerceptions,
                 'total' => $total,
                 'currency' => $validated['currency'] ?? 'ARS',
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
@@ -132,6 +147,24 @@ class InvoiceController extends Controller
                     'subtotal' => $itemSubtotal,
                     'total' => $itemTotal,
                 ]);
+            }
+
+            // Create perceptions
+            if (isset($validated['perceptions'])) {
+                foreach ($validated['perceptions'] as $perception) {
+                    $baseAmount = $perception['type'] === 'vat_perception' 
+                        ? $totalTaxes 
+                        : ($subtotal + $totalTaxes);
+                    $amount = $baseAmount * ($perception['rate'] / 100);
+
+                    $invoice->perceptions()->create([
+                        'type' => $perception['type'],
+                        'name' => $perception['name'],
+                        'rate' => $perception['rate'],
+                        'base_amount' => $baseAmount,
+                        'amount' => $amount,
+                    ]);
+                }
             }
 
             // Auto-authorize with AFIP if certificate is configured
@@ -257,5 +290,125 @@ class InvoiceController extends Controller
             'message' => 'Invoice cancelled successfully',
             'note' => 'To legally cancel this invoice, you should issue a credit note.',
         ]);
+    }
+
+    public function validateWithAfip(Request $request, $companyId)
+    {
+        $company = Company::with('afipCertificate')->findOrFail($companyId);
+        
+        $this->authorize('create', [Invoice::class, $company]);
+
+        $validated = $request->validate([
+            'issuer_cuit' => 'required|string',
+            'invoice_type' => 'required|in:A,B,C,E',
+            'invoice_number' => 'required|string|regex:/^\d{4}-\d{8}$/',
+        ]);
+
+        try {
+            // Parse invoice number
+            [$salesPoint, $voucherNumber] = explode('-', $validated['invoice_number']);
+            $salesPoint = (int) $salesPoint;
+            $voucherNumber = (int) $voucherNumber;
+
+            $afipService = new AfipInvoiceService($company);
+            $invoiceType = $this->getAfipInvoiceTypeCode($validated['invoice_type']);
+            
+            $result = $afipService->consultInvoice(
+                $validated['issuer_cuit'],
+                $invoiceType,
+                $salesPoint,
+                $voucherNumber
+            );
+
+            return response()->json([
+                'success' => true,
+                'invoice' => $result,
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No se pudo validar la factura con AFIP',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    private function getAfipInvoiceTypeCode(string $type): int
+    {
+        $types = ['A' => 1, 'B' => 6, 'C' => 11, 'E' => 19];
+        return $types[$type] ?? 6;
+    }
+
+    public function uploadAttachment(Request $request, $companyId, $id)
+    {
+        $invoice = Invoice::where('issuer_company_id', $companyId)
+            ->orWhere('receiver_company_id', $companyId)
+            ->findOrFail($id);
+
+        $this->authorize('update', $invoice);
+
+        $request->validate([
+            'attachment' => 'required|file|mimes:pdf|max:10240',
+        ]);
+
+        $file = $request->file('attachment');
+        $originalName = $file->getClientOriginalName();
+        $path = $file->store('invoices/attachments', 'public');
+
+        $invoice->update([
+            'attachment_path' => $path,
+            'attachment_original_name' => $originalName,
+        ]);
+
+        return response()->json([
+            'message' => 'Attachment uploaded successfully',
+            'attachment' => [
+                'path' => $path,
+                'original_name' => $originalName,
+                'url' => asset('storage/' . $path),
+            ],
+        ]);
+    }
+
+    public function downloadAttachment($companyId, $id)
+    {
+        $invoice = Invoice::where('issuer_company_id', $companyId)
+            ->orWhere('receiver_company_id', $companyId)
+            ->findOrFail($id);
+
+        $this->authorize('view', $invoice);
+
+        if (!$invoice->attachment_path) {
+            return response()->json(['message' => 'No attachment found'], 404);
+        }
+
+        $filePath = storage_path('app/public/' . $invoice->attachment_path);
+
+        if (!file_exists($filePath)) {
+            return response()->json(['message' => 'File not found'], 404);
+        }
+
+        return response()->download($filePath, $invoice->attachment_original_name);
+    }
+
+    public function deleteAttachment($companyId, $id)
+    {
+        $invoice = Invoice::where('issuer_company_id', $companyId)
+            ->orWhere('receiver_company_id', $companyId)
+            ->findOrFail($id);
+
+        $this->authorize('update', $invoice);
+
+        if ($invoice->attachment_path) {
+            \Storage::disk('public')->delete($invoice->attachment_path);
+        }
+
+        $invoice->update([
+            'attachment_path' => null,
+            'attachment_original_name' => null,
+        ]);
+
+        return response()->json(['message' => 'Attachment deleted successfully']);
     }
 }

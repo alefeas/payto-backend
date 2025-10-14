@@ -73,12 +73,14 @@ class AfipCertificateController extends Controller
         $request->validate([
             'certificate' => 'required|string',
             'password' => 'nullable|string',
+            'environment' => 'nullable|in:testing,production',
         ]);
 
         $certificate = $this->certificateService->uploadCertificate(
             $company,
             $request->input('certificate'),
-            $request->input('password')
+            $request->input('password'),
+            $request->input('environment', 'testing')
         );
 
         return $this->success([
@@ -100,13 +102,15 @@ class AfipCertificateController extends Controller
             'certificate' => 'required|string',
             'private_key' => 'required|string',
             'password' => 'nullable|string',
+            'environment' => 'nullable|in:testing,production',
         ]);
 
         $certificate = $this->certificateService->uploadManualCertificate(
             $company,
             $request->input('certificate'),
             $request->input('private_key'),
-            $request->input('password')
+            $request->input('password'),
+            $request->input('environment', 'testing')
         );
 
         return $this->success([
