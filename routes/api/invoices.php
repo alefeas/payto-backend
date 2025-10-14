@@ -12,6 +12,8 @@ Route::post('/{id}/cancel', [InvoiceController::class, 'cancel']);
 Route::post('/{id}/attachment', [InvoiceController::class, 'uploadAttachment']);
 Route::get('/{id}/attachment', [InvoiceController::class, 'downloadAttachment']);
 Route::delete('/{id}/attachment', [InvoiceController::class, 'deleteAttachment']);
+Route::get('/{id}/pdf', [InvoiceController::class, 'downloadPDF']);
+Route::get('/{id}/txt', [InvoiceController::class, 'downloadTXT']);
 Route::get('/{invoiceId}/payments', [App\Http\Controllers\Api\InvoicePaymentController::class, 'index']);
 Route::post('/{invoiceId}/payments', [App\Http\Controllers\Api\InvoicePaymentController::class, 'store']);
 Route::delete('/{invoiceId}/payments/{paymentId}', [App\Http\Controllers\Api\InvoicePaymentController::class, 'destroy']);

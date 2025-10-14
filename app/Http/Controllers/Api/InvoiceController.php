@@ -415,7 +415,7 @@ class InvoiceController extends Controller
                 'currency' => $validated['currency'],
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
                 'notes' => $validated['notes'] ?? null,
-                'status' => 'issued',
+                'status' => 'approved', // Factura recibida ya está aprobada
                 'afip_status' => 'approved',
                 'approvals_required' => 0,
                 'approvals_received' => 0,
@@ -530,5 +530,75 @@ class InvoiceController extends Controller
         ]);
 
         return response()->json(['message' => 'Attachment deleted successfully']);
+    }
+
+    public function downloadPDF($companyId, $id)
+    {
+        $invoice = Invoice::with(['client', 'items'])->findOrFail($id);
+
+        // Si tiene PDF adjunto, descargarlo
+        if ($invoice->attachment_path) {
+            $filePath = storage_path('app/public/' . $invoice->attachment_path);
+            if (file_exists($filePath)) {
+                return response()->download($filePath, $invoice->attachment_original_name);
+            }
+        }
+
+        // Si no tiene adjunto, generar PDF simple
+        $pdf = $this->generateSimplePDF($invoice);
+        return response($pdf, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="factura-' . $invoice->number . '.pdf"',
+        ]);
+    }
+
+    public function downloadTXT($companyId, $id)
+    {
+        $invoice = Invoice::with(['client', 'items'])->findOrFail($id);
+
+        $txt = $this->generateTXT($invoice);
+        return response($txt, 200, [
+            'Content-Type' => 'text/plain',
+            'Content-Disposition' => 'attachment; filename="factura-' . $invoice->number . '.txt"',
+        ]);
+    }
+
+    private function generateSimplePDF($invoice)
+    {
+        // Generar PDF simple con texto plano (sin librería)
+        $content = "FACTURA " . $invoice->type . "\n";
+        $content .= "Número: " . $invoice->number . "\n";
+        $content .= "Fecha: " . $invoice->issue_date->format('d/m/Y') . "\n";
+        $content .= "Cliente: " . ($invoice->client->business_name ?? $invoice->client->first_name . ' ' . $invoice->client->last_name) . "\n";
+        $content .= "CUIT/DNI: " . $invoice->client->document_number . "\n\n";
+        $content .= "ITEMS:\n";
+        foreach ($invoice->items as $item) {
+            $content .= "- " . $item->description . " x" . $item->quantity . " = $" . number_format($item->subtotal, 2) . "\n";
+        }
+        $content .= "\nSubtotal: $" . number_format($invoice->subtotal, 2) . "\n";
+        $content .= "IVA: $" . number_format($invoice->total_taxes, 2) . "\n";
+        $content .= "TOTAL: $" . number_format($invoice->total, 2) . "\n";
+        if ($invoice->afip_cae) {
+            $content .= "\nCAE: " . $invoice->afip_cae . "\n";
+            $content .= "Vto CAE: " . $invoice->afip_cae_due_date->format('d/m/Y') . "\n";
+        }
+        return $content;
+    }
+
+    private function generateTXT($invoice)
+    {
+        // Formato TXT para AFIP/ARCA
+        $lines = [];
+        $lines[] = $invoice->number;
+        $lines[] = $invoice->type;
+        $lines[] = $invoice->issue_date->format('Ymd');
+        $lines[] = $invoice->client->document_type . '|' . $invoice->client->document_number;
+        $lines[] = number_format($invoice->subtotal, 2, '.', '');
+        $lines[] = number_format($invoice->total_taxes, 2, '.', '');
+        $lines[] = number_format($invoice->total, 2, '.', '');
+        if ($invoice->afip_cae) {
+            $lines[] = $invoice->afip_cae;
+        }
+        return implode("\n", $lines);
     }
 }
