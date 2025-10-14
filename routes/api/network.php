@@ -1,20 +1,15 @@
 <?php
 
+use App\Http\Controllers\Api\CompanyConnectionController;
 use Illuminate\Support\Facades\Route;
 
-// Network routes will be implemented here
-Route::get('/connections', function () {
-    return response()->json(['message' => 'List connections']);
-});
-
-Route::post('/connections', function () {
-    return response()->json(['message' => 'Create connection']);
-});
-
-Route::put('/connections/{id}', function ($id) {
-    return response()->json(['message' => 'Update connection', 'id' => $id]);
-});
-
-Route::delete('/connections/{id}', function ($id) {
-    return response()->json(['message' => 'Delete connection', 'id' => $id]);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::prefix('companies/{companyId}/network')->group(function () {
+        Route::get('/', [CompanyConnectionController::class, 'index']);
+        Route::get('/stats', [CompanyConnectionController::class, 'stats']);
+        Route::get('/requests', [CompanyConnectionController::class, 'pendingRequests']);
+        Route::post('/connect', [CompanyConnectionController::class, 'store']);
+        Route::post('/requests/{connectionId}/accept', [CompanyConnectionController::class, 'accept']);
+        Route::post('/requests/{connectionId}/reject', [CompanyConnectionController::class, 'reject']);
+    });
 });

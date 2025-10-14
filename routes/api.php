@@ -23,4 +23,7 @@ Route::prefix('v1')->group(function () {
     
     // Bank account routes
     require base_path('routes/api/bank_accounts.php');
+    
+    // Network routes
+    require base_path('routes/api/network.php');
 });
