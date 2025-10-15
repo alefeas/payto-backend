@@ -155,15 +155,21 @@ class CompanyService implements CompanyServiceInterface
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
-        // Validate required_approvals doesn't exceed approvers count
+        // Validate required_approvals
         if (isset($data['required_approvals'])) {
-            $approversCount = CompanyMember::where('company_id', $companyId)
-                ->where('is_active', true)
-                ->whereIn('role', ['owner', 'administrator', 'financial_director', 'accountant', 'approver'])
-                ->count();
+            if ($data['required_approvals'] < 0) {
+                throw new BadRequestException('El número de aprobaciones requeridas no puede ser negativo');
+            }
             
-            if ($data['required_approvals'] > $approversCount) {
-                throw new BadRequestException("No puedes requerir más aprobaciones ({$data['required_approvals']}) que miembros con permiso para aprobar ({$approversCount})");
+            if ($data['required_approvals'] > 0) {
+                $approversCount = CompanyMember::where('company_id', $companyId)
+                    ->where('is_active', true)
+                    ->whereIn('role', ['owner', 'administrator', 'financial_director', 'accountant', 'approver'])
+                    ->count();
+                
+                if ($data['required_approvals'] > $approversCount) {
+                    throw new BadRequestException("No puedes requerir más aprobaciones ({$data['required_approvals']}) que miembros con permiso para aprobar ({$approversCount})");
+                }
             }
         }
 
@@ -212,6 +218,17 @@ class CompanyService implements CompanyServiceInterface
 
         $company->update($updateData);
         $company->refresh();
+
+        // Auto-approve pending invoices if required_approvals was reduced
+        if (isset($data['required_approvals'])) {
+            \App\Models\Invoice::where('receiver_company_id', $companyId)
+                ->where('status', 'pending_approval')
+                ->where('approvals_received', '>=', $data['required_approvals'])
+                ->update([
+                    'status' => 'approved',
+                    'approval_date' => now(),
+                ]);
+        }
 
         $this->auditService->log(
             $companyId,

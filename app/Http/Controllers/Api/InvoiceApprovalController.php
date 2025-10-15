@@ -13,7 +13,7 @@ class InvoiceApprovalController extends Controller
 {
     use ApiResponse;
 
-    public function approve(Request $request, string $invoiceId): JsonResponse
+    public function approve(Request $request, string $companyId, string $invoiceId): JsonResponse
     {
         $invoice = Invoice::findOrFail($invoiceId);
         $user = auth()->user();
@@ -56,7 +56,7 @@ class InvoiceApprovalController extends Controller
         ], 'Factura aprobada exitosamente');
     }
 
-    public function reject(Request $request, string $invoiceId): JsonResponse
+    public function reject(Request $request, string $companyId, string $invoiceId): JsonResponse
     {
         $request->validate([
             'reason' => 'required|string|max:500',
@@ -76,7 +76,7 @@ class InvoiceApprovalController extends Controller
         return $this->success(null, 'Factura rechazada');
     }
 
-    public function getApprovals(string $invoiceId): JsonResponse
+    public function getApprovals(string $companyId, string $invoiceId): JsonResponse
     {
         $invoice = Invoice::with(['approvals.user'])->findOrFail($invoiceId);
 

@@ -31,6 +31,34 @@ class InvoiceController extends Controller
 
         $invoices = $query->orderBy('created_at', 'desc')
             ->paginate(20);
+        
+        // Override approvals_required with current company setting and format approvals
+        $invoices->getCollection()->transform(function ($invoice) use ($company) {
+            $invoice->approvals_required = $company->required_approvals;
+            
+            // Format approvals for frontend
+            if ($invoice->approvals && $invoice->approvals->count() > 0) {
+                $invoice->approvals = $invoice->approvals->map(function ($approval) {
+                    $fullName = trim($approval->user->first_name . ' ' . $approval->user->last_name);
+                    return [
+                        'id' => $approval->id,
+                        'user' => [
+                            'id' => $approval->user->id,
+                            'name' => $fullName ?: $approval->user->email,
+                            'first_name' => $approval->user->first_name,
+                            'last_name' => $approval->user->last_name,
+                            'email' => $approval->user->email,
+                        ],
+                        'notes' => $approval->notes,
+                        'approved_at' => $approval->approved_at->toIso8601String(),
+                    ];
+                })->values();
+            } else {
+                $invoice->approvals = [];
+            }
+            
+            return $invoice;
+        });
 
         return response()->json($invoices);
     }
@@ -354,29 +382,32 @@ class InvoiceController extends Controller
 
         $validated = $request->validate([
             'issuer_cuit' => 'required|string',
-            'issuer_business_name' => 'required|string',
+            'issuer_business_name' => 'required|string|max:150',
             'invoice_type' => 'required|in:A,B,C,E',
             'invoice_number' => 'required|string',
             'issue_date' => 'required|date',
             'due_date' => 'required|date',
             'currency' => 'required|string|size:3',
             'exchange_rate' => 'nullable|numeric|min:0',
-            'notes' => 'nullable|string',
+            'notes' => 'nullable|string|max:500',
             'items' => 'required|array|min:1',
-            'items.*.description' => 'required|string',
+            'items.*.description' => 'required|string|max:200',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
-            'items.*.tax_rate' => 'required|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'required|numeric',
         ]);
 
         try {
             DB::beginTransaction();
 
+            // Limpiar CUIT
+            $cleanCuit = preg_replace('/[^0-9]/', '', $validated['issuer_cuit']);
+            
             // Crear cliente que representa al proveedor
             $client = \App\Models\Client::firstOrCreate(
                 [
                     'company_id' => $companyId,
-                    'document_number' => preg_replace('/[^0-9]/', '', $validated['issuer_cuit']),
+                    'document_number' => $cleanCuit,
                 ],
                 [
                     'document_type' => 'CUIT',
@@ -428,7 +459,8 @@ class InvoiceController extends Controller
                 'status' => $requiresApproval ? 'pending_approval' : 'approved',
                 'afip_status' => 'approved',
                 'approvals_required' => $company->required_approvals,
-                'approvals_received' => 0,
+                'approvals_received' => $requiresApproval ? 0 : $company->required_approvals,
+                'approval_date' => $requiresApproval ? null : now(),
                 'created_by' => auth()->id(),
             ]);
 
