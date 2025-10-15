@@ -148,13 +148,14 @@ class AfipCertificateController extends Controller
 
     public function destroy(string $companyId): JsonResponse
     {
-        $company = Company::whereHas('members', function ($query) {
-            $query->where('user_id', auth()->id())
-                  ->where('role', 'owner')
-                  ->where('is_active', true);
-        })->first();
+        $company = Company::findOrFail($companyId);
+        
+        $member = $company->members()
+            ->where('user_id', auth()->id())
+            ->where('is_active', true)
+            ->first();
 
-        if (!$company) {
+        if (!$member || $member->role !== 'owner') {
             return $this->error('Solo el propietario puede eliminar el certificado AFIP', 403);
         }
 
