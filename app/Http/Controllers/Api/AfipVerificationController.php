@@ -41,7 +41,7 @@ class AfipVerificationController extends Controller
         if (!$company->isAfipVerified()) {
             return response()->json([
                 'valid' => false,
-                'message' => 'Para consultar datos de AFIP, primero debes verificar tu perfil fiscal subiendo tu certificado digital. Esto te permitirá acceder a información actualizada de tus clientes y proveedores.',
+                'message' => 'Para consultar datos de AFIP necesitás un certificado firmado por AFIP (testing o producción). Los certificados autofirmados no permiten conectarse con los servidores de AFIP.',
                 'requires_verification' => true
             ], 403);
         }

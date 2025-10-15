@@ -34,6 +34,10 @@ class AfipCertificateController extends Controller
             return $this->error('No hay certificado configurado', 404);
         }
 
+        $certContent = \Illuminate\Support\Facades\Storage::get($certificate->certificate_path);
+        $certData = openssl_x509_parse($certContent);
+        $isSelfSigned = ($certData['subject'] ?? []) === ($certData['issuer'] ?? []);
+
         return $this->success([
             'id' => $certificate->id,
             'isActive' => $certificate->is_active,
@@ -43,6 +47,7 @@ class AfipCertificateController extends Controller
             'isExpiringSoon' => $certificate->isExpiringSoon(),
             'environment' => $certificate->environment,
             'hasValidToken' => $certificate->hasValidToken(),
+            'isSelfSigned' => $isSelfSigned,
         ]);
     }
 

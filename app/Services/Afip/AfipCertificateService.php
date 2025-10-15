@@ -65,8 +65,11 @@ class AfipCertificateService
 
         // Validar que no sea autofirmado en producción o si no está permitido
         if ($this->isSelfSigned($certData)) {
-            if ($environment === 'production' || !config('afip.allow_self_signed_certs', false)) {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos para uso en producción.');
+            if ($environment === 'production') {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos en producción.');
+            }
+            if (!config('afip.allow_self_signed_certs', false)) {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados están deshabilitados.');
             }
         }
 
@@ -111,8 +114,11 @@ class AfipCertificateService
 
         // Validar que no sea autofirmado en producción o si no está permitido
         if ($this->isSelfSigned($certData)) {
-            if ($environment === 'production' || !config('afip.allow_self_signed_certs', false)) {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos para uso en producción.');
+            if ($environment === 'production') {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos en producción.');
+            }
+            if (!config('afip.allow_self_signed_certs', false)) {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados están deshabilitados.');
             }
         }
 
