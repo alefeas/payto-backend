@@ -29,4 +29,9 @@ Route::prefix('v1')->group(function () {
     
     // Tasks routes
     require base_path('routes/api/tasks.php');
+    
+    // AFIP routes
+    Route::prefix('afip')->group(function () {
+        require base_path('routes/api/afip.php');
+    });
 });

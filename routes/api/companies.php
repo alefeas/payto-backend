@@ -35,6 +35,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'update']);
     Route::delete('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'destroy']);
     
+    // Supplier routes
+    Route::get('/companies/{companyId}/suppliers', [App\Http\Controllers\Api\SupplierController::class, 'index']);
+    Route::post('/companies/{companyId}/suppliers', [App\Http\Controllers\Api\SupplierController::class, 'store']);
+    Route::put('/companies/{companyId}/suppliers/{id}', [App\Http\Controllers\Api\SupplierController::class, 'update']);
+    Route::delete('/companies/{companyId}/suppliers/{id}', [App\Http\Controllers\Api\SupplierController::class, 'destroy']);
+    
     // Invoice routes
     Route::prefix('/companies/{companyId}/invoices')->group(base_path('routes/api/invoices.php'));
 });

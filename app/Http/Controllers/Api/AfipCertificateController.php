@@ -31,7 +31,7 @@ class AfipCertificateController extends Controller
         $certificate = $this->certificateService->getCertificate($company);
 
         if (!$certificate) {
-            return $this->success(null, 'No hay certificado configurado');
+            return $this->error('No hay certificado configurado', 404);
         }
 
         return $this->success([

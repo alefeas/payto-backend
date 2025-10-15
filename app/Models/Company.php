@@ -24,6 +24,10 @@ class Company extends Model
         'tax_condition',
         'default_sales_point',
         'last_invoice_number',
+        'verification_status',
+        'afip_certificate_path',
+        'afip_key_path',
+        'verified_at',
     ];
 
     protected $casts = [
@@ -33,6 +37,7 @@ class Company extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',
+        'verified_at' => 'datetime',
     ];
 
     public function members()
@@ -90,5 +95,10 @@ class Company extends Model
     public function clients()
     {
         return $this->hasMany(Client::class);
+    }
+
+    public function isAfipVerified(): bool
+    {
+        return $this->verification_status === 'verified';
     }
 }

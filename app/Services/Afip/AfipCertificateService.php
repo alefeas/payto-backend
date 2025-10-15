@@ -57,10 +57,29 @@ class AfipCertificateService
         ?string $password = null,
         string $environment = 'testing'
     ): CompanyAfipCertificate {
+        $certData = openssl_x509_parse($certificateContent);
+        
+        if (!$certData) {
+            throw new \Exception('Certificado inválido');
+        }
+
+        // Validar que no sea autofirmado en producción o si no está permitido
+        if ($this->isSelfSigned($certData)) {
+            if ($environment === 'production' || !config('afip.allow_self_signed_certs', false)) {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos para uso en producción.');
+            }
+        }
+
+        $certCuit = $certData['subject']['CN'] ?? null;
+        $companyCuit = preg_replace('/[^0-9]/', '', $company->national_id);
+        $certCuitClean = preg_replace('/[^0-9]/', '', $certCuit ?? '');
+
+        if ($certCuitClean !== $companyCuit) {
+            throw new \Exception("El CUIT del certificado ({$certCuit}) no coincide con el CUIT de la empresa ({$company->national_id})");
+        }
+
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
         Storage::put($certPath, $certificateContent);
-
-        $certData = openssl_x509_parse($certificateContent);
         
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
@@ -84,13 +103,32 @@ class AfipCertificateService
         ?string $password = null,
         string $environment = 'testing'
     ): CompanyAfipCertificate {
+        $certData = openssl_x509_parse($certificateContent);
+        
+        if (!$certData) {
+            throw new \Exception('Certificado inválido');
+        }
+
+        // Validar que no sea autofirmado en producción o si no está permitido
+        if ($this->isSelfSigned($certData)) {
+            if ($environment === 'production' || !config('afip.allow_self_signed_certs', false)) {
+                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos para uso en producción.');
+            }
+        }
+
+        $certCuit = $certData['subject']['CN'] ?? null;
+        $companyCuit = preg_replace('/[^0-9]/', '', $company->national_id);
+        $certCuitClean = preg_replace('/[^0-9]/', '', $certCuit ?? '');
+
+        if ($certCuitClean !== $companyCuit) {
+            throw new \Exception("El CUIT del certificado ({$certCuit}) no coincide con el CUIT de la empresa ({$company->national_id})");
+        }
+
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
         $keyPath = "afip/certificates/{$company->id}/private.key";
 
         Storage::put($certPath, $certificateContent);
         Storage::put($keyPath, $privateKeyContent);
-
-        $certData = openssl_x509_parse($certificateContent);
 
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
@@ -159,5 +197,14 @@ class AfipCertificateService
             'message' => 'Certificado válido',
             'expires_in_days' => $certificate->valid_until->diffInDays(now()),
         ];
+    }
+
+    private function isSelfSigned(array $certData): bool
+    {
+        // Un certificado es autofirmado si el issuer y el subject son iguales
+        $subject = $certData['subject'] ?? [];
+        $issuer = $certData['issuer'] ?? [];
+        
+        return $subject === $issuer;
     }
 }
