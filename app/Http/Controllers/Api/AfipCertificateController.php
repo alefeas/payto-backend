@@ -30,13 +30,17 @@ class AfipCertificateController extends Controller
 
         $certificate = $this->certificateService->getCertificate($company);
 
-        if (!$certificate) {
+        if (!$certificate || !$certificate->certificate_path) {
             return $this->error('No hay certificado configurado', 404);
         }
 
-        $certContent = \Illuminate\Support\Facades\Storage::get($certificate->certificate_path);
-        $certData = openssl_x509_parse($certContent);
-        $isSelfSigned = ($certData['subject'] ?? []) === ($certData['issuer'] ?? []);
+        try {
+            $certContent = \Illuminate\Support\Facades\Storage::get($certificate->certificate_path);
+            $certData = openssl_x509_parse($certContent);
+            $isSelfSigned = ($certData['subject'] ?? []) === ($certData['issuer'] ?? []);
+        } catch (\Exception $e) {
+            $isSelfSigned = false;
+        }
 
         return $this->success([
             'id' => $certificate->id,
@@ -148,7 +152,11 @@ class AfipCertificateController extends Controller
             $query->where('user_id', auth()->id())
                   ->where('role', 'owner')
                   ->where('is_active', true);
-        })->findOrFail($companyId);
+        })->first();
+
+        if (!$company) {
+            return $this->error('Solo el propietario puede eliminar el certificado AFIP', 403);
+        }
 
         $this->certificateService->deleteCertificate($company);
 

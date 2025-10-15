@@ -155,6 +155,18 @@ class CompanyService implements CompanyServiceInterface
                   ->where('is_active', true);
         })->findOrFail($companyId);
 
+        // Validate required_approvals doesn't exceed approvers count
+        if (isset($data['required_approvals'])) {
+            $approversCount = CompanyMember::where('company_id', $companyId)
+                ->where('is_active', true)
+                ->whereIn('role', ['owner', 'administrator', 'financial_director', 'accountant', 'approver'])
+                ->count();
+            
+            if ($data['required_approvals'] > $approversCount) {
+                throw new BadRequestException("No puedes requerir más aprobaciones ({$data['required_approvals']}) que miembros con permiso para aprobar ({$approversCount})");
+            }
+        }
+
         $updateData = [
             'name' => $data['name'] ?? $company->name,
             'business_name' => $data['business_name'] ?? $company->business_name,
@@ -163,6 +175,7 @@ class CompanyService implements CompanyServiceInterface
             'tax_condition' => isset($data['tax_condition']) ? $data['tax_condition'] : $company->tax_condition,
             'default_sales_point' => $data['default_sales_point'] ?? $company->default_sales_point,
             'last_invoice_number' => $data['last_invoice_number'] ?? $company->last_invoice_number,
+            'required_approvals' => $data['required_approvals'] ?? $company->required_approvals,
         ];
 
         if (isset($data['street']) || isset($data['street_number']) || isset($data['postal_code']) || isset($data['province'])) {
@@ -298,6 +311,7 @@ class CompanyService implements CompanyServiceInterface
             'incomeTaxRetention' => $billing?->income_tax_retention ?? 2,
             'grossIncomeRetention' => $billing?->gross_income_retention ?? 0.42,
             'socialSecurityRetention' => $billing?->social_security_retention ?? 0,
+            'requiredApprovals' => $company->required_approvals ?? 1,
             'isActive' => $company->is_active,
             'uniqueId' => $company->unique_id,
             'inviteCode' => $company->invite_code,

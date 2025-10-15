@@ -28,12 +28,14 @@ class Company extends Model
         'afip_certificate_path',
         'afip_key_path',
         'verified_at',
+        'required_approvals',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
         'last_invoice_number' => 'integer',
         'default_sales_point' => 'integer',
+        'required_approvals' => 'integer',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',

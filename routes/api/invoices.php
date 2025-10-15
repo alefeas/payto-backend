@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\InvoiceController;
+use App\Http\Controllers\Api\InvoiceApprovalController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', [InvoiceController::class, 'index']);
@@ -17,4 +18,7 @@ Route::get('/{id}/txt', [InvoiceController::class, 'downloadTXT']);
 Route::get('/{invoiceId}/payments', [App\Http\Controllers\Api\InvoicePaymentController::class, 'index']);
 Route::post('/{invoiceId}/payments', [App\Http\Controllers\Api\InvoicePaymentController::class, 'store']);
 Route::delete('/{invoiceId}/payments/{paymentId}', [App\Http\Controllers\Api\InvoicePaymentController::class, 'destroy']);
+Route::get('/{invoiceId}/approvals', [InvoiceApprovalController::class, 'getApprovals']);
+Route::post('/{invoiceId}/approve', [InvoiceApprovalController::class, 'approve']);
+Route::post('/{invoiceId}/reject', [InvoiceApprovalController::class, 'reject']);
 Route::delete('/{id}', [InvoiceController::class, 'destroy']);

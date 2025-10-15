@@ -20,9 +20,16 @@ class InvoiceController extends Controller
         
         $this->authorize('viewAny', [Invoice::class, $company]);
 
-        $invoices = Invoice::where('issuer_company_id', $companyId)
-            ->with(['client', 'items', 'receiverCompany'])
-            ->orderBy('created_at', 'desc')
+        $status = $request->query('status');
+        
+        $query = Invoice::where('receiver_company_id', $companyId)
+            ->with(['client', 'items', 'issuerCompany', 'approvals.user']);
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        $invoices = $query->orderBy('created_at', 'desc')
             ->paginate(20);
 
         return response()->json($invoices);
@@ -396,6 +403,9 @@ class InvoiceController extends Controller
                 ->first();
             $voucherNumber = $lastReceived ? $lastReceived->voucher_number + 1 : 1;
 
+            // Determinar estado inicial basado en configuración de aprobaciones
+            $requiresApproval = $company->required_approvals > 0;
+            
             // Crear factura recibida (el proveedor es el emisor, tu empresa es el receptor)
             $invoice = Invoice::create([
                 'number' => $validated['invoice_number'],
@@ -415,9 +425,9 @@ class InvoiceController extends Controller
                 'currency' => $validated['currency'],
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
                 'notes' => $validated['notes'] ?? null,
-                'status' => 'approved', // Factura recibida ya está aprobada
+                'status' => $requiresApproval ? 'pending_approval' : 'approved',
                 'afip_status' => 'approved',
-                'approvals_required' => 0,
+                'approvals_required' => $company->required_approvals,
                 'approvals_received' => 0,
                 'created_by' => auth()->id(),
             ]);

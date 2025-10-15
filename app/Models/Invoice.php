@@ -110,6 +110,11 @@ class Invoice extends Model
         return $this->hasMany(InvoicePayment::class);
     }
 
+    public function approvals(): HasMany
+    {
+        return $this->hasMany(InvoiceApproval::class);
+    }
+
     public function getTotalPaidAttribute(): float
     {
         return $this->payments()->sum('amount');
