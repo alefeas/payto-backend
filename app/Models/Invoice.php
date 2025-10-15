@@ -22,6 +22,7 @@ class Invoice extends Model
         'issuer_company_id',
         'receiver_company_id',
         'client_id',
+        'supplier_id',
         'issue_date',
         'due_date',
         'currency',
@@ -88,6 +89,11 @@ class Invoice extends Model
     public function client(): BelongsTo
     {
         return $this->belongsTo(Client::class);
+    }
+
+    public function supplier(): BelongsTo
+    {
+        return $this->belongsTo(Supplier::class, 'supplier_id');
     }
 
     public function items(): HasMany

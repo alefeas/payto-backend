@@ -17,7 +17,12 @@ class Supplier extends Model
         'email',
         'phone',
         'address',
-        'tax_condition'
+        'tax_condition',
+        'bank_name',
+        'bank_account_type',
+        'bank_account_number',
+        'bank_cbu',
+        'bank_alias',
     ];
 
     public function company(): BelongsTo

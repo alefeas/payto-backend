@@ -43,4 +43,19 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Invoice routes
     Route::prefix('/companies/{companyId}/invoices')->group(base_path('routes/api/invoices.php'));
+    
+    // Payment routes
+    Route::get('/companies/{companyId}/payments', [App\Http\Controllers\Api\PaymentController::class, 'index']);
+    Route::post('/companies/{companyId}/payments', [App\Http\Controllers\Api\PaymentController::class, 'store']);
+    Route::put('/companies/{companyId}/payments/{paymentId}', [App\Http\Controllers\Api\PaymentController::class, 'update']);
+    Route::delete('/companies/{companyId}/payments/{paymentId}', [App\Http\Controllers\Api\PaymentController::class, 'destroy']);
+    Route::post('/companies/{companyId}/payments/{paymentId}/confirm', [App\Http\Controllers\Api\PaymentController::class, 'confirm']);
+    Route::post('/companies/{companyId}/payments/generate-txt', [App\Http\Controllers\Api\PaymentController::class, 'generateTxt']);
+    
+    // Collection routes
+    Route::get('/companies/{companyId}/collections', [App\Http\Controllers\Api\CollectionController::class, 'index']);
+    Route::post('/companies/{companyId}/collections', [App\Http\Controllers\Api\CollectionController::class, 'store']);
+    Route::put('/companies/{companyId}/collections/{collectionId}', [App\Http\Controllers\Api\CollectionController::class, 'update']);
+    Route::post('/companies/{companyId}/collections/{collectionId}/confirm', [App\Http\Controllers\Api\CollectionController::class, 'confirm']);
+    Route::post('/companies/{companyId}/collections/{collectionId}/reject', [App\Http\Controllers\Api\CollectionController::class, 'reject']);
 });

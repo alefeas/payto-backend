@@ -22,8 +22,12 @@ class InvoiceController extends Controller
 
         $status = $request->query('status');
         
-        $query = Invoice::where('receiver_company_id', $companyId)
-            ->with(['client', 'items', 'issuerCompany', 'approvals.user']);
+        // Obtener TODAS las facturas relacionadas con la empresa (emitidas Y recibidas)
+        $query = Invoice::where(function($q) use ($companyId) {
+                $q->where('issuer_company_id', $companyId)
+                  ->orWhere('receiver_company_id', $companyId);
+            })
+            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user']);
 
         if ($status) {
             $query->where('status', $status);
@@ -33,8 +37,14 @@ class InvoiceController extends Controller
             ->paginate(20);
         
         // Override approvals_required with current company setting and format approvals
-        $invoices->getCollection()->transform(function ($invoice) use ($company) {
-            $invoice->approvals_required = $company->required_approvals;
+        $invoices->getCollection()->transform(function ($invoice) use ($company, $companyId) {
+            // Solo override approvals_required si la empresa es la receptora
+            if ($invoice->receiver_company_id === $companyId) {
+                $invoice->approvals_required = $company->required_approvals;
+            }
+            
+            // Agregar campo de dirección para facilitar filtrado en frontend
+            $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
             
             // Format approvals for frontend
             if ($invoice->approvals && $invoice->approvals->count() > 0) {
@@ -424,8 +434,8 @@ class InvoiceController extends Controller
             // Limpiar CUIT
             $cleanCuit = preg_replace('/[^0-9]/', '', $validated['issuer_cuit']);
             
-            // Crear cliente que representa al proveedor
-            $client = \App\Models\Client::firstOrCreate(
+            // Buscar o crear proveedor (no cliente)
+            $supplier = \App\Models\Supplier::firstOrCreate(
                 [
                     'company_id' => $companyId,
                     'document_number' => $cleanCuit,
@@ -448,12 +458,10 @@ class InvoiceController extends Controller
             }
             $total = $subtotal + $totalTaxes;
 
-            // Generar voucher_number único para facturas recibidas
-            $lastReceived = Invoice::where('receiver_company_id', $companyId)
-                ->where('issuer_company_id', $companyId)
-                ->orderBy('voucher_number', 'desc')
-                ->first();
-            $voucherNumber = $lastReceived ? $lastReceived->voucher_number + 1 : 1;
+            // Parsear el número de factura del proveedor (formato: 0001-00000123)
+            $invoiceParts = explode('-', $validated['invoice_number']);
+            $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : 0;
+            $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
 
             // Determinar estado inicial basado en configuración de aprobaciones
             $requiresApproval = $company->required_approvals > 0;
@@ -462,12 +470,12 @@ class InvoiceController extends Controller
             $invoice = Invoice::create([
                 'number' => $validated['invoice_number'],
                 'type' => $validated['invoice_type'],
-                'sales_point' => 9999, // Punto de venta especial para facturas recibidas
+                'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
                 'issuer_company_id' => $companyId, // Usar companyId para cumplir unique constraint
                 'receiver_company_id' => $companyId, // Tu empresa recibe la factura
-                'client_id' => $client->id, // El proveedor
+                'supplier_id' => $supplier->id, // El proveedor
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
                 'subtotal' => $subtotal,
