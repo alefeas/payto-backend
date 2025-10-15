@@ -328,6 +328,27 @@ class InvoiceController extends Controller
         ]);
     }
 
+    public function archive($companyId, $id)
+    {
+        $invoice = Invoice::where('receiver_company_id', $companyId)->findOrFail($id);
+
+        $this->authorize('update', $invoice);
+
+        if ($invoice->status !== 'rejected') {
+            return response()->json([
+                'message' => 'Only rejected invoices can be archived',
+            ], 422);
+        }
+
+        $invoice->update([
+            'status' => 'archived',
+        ]);
+
+        return response()->json([
+            'message' => 'Invoice archived successfully',
+        ]);
+    }
+
     public function validateWithAfip(Request $request, $companyId)
     {
         $company = Company::with('afipCertificate')->findOrFail($companyId);

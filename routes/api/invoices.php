@@ -21,4 +21,5 @@ Route::delete('/{invoiceId}/payments/{paymentId}', [App\Http\Controllers\Api\Inv
 Route::get('/{invoiceId}/approvals', [InvoiceApprovalController::class, 'getApprovals']);
 Route::post('/{invoiceId}/approve', [InvoiceApprovalController::class, 'approve']);
 Route::post('/{invoiceId}/reject', [InvoiceApprovalController::class, 'reject']);
+Route::post('/{id}/archive', [InvoiceController::class, 'archive']);
 Route::delete('/{id}', [InvoiceController::class, 'destroy']);

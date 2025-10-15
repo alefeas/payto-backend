@@ -3,19 +3,27 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
 use App\Models\Supplier;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\Request;
 
 class SupplierController extends Controller
 {
+    use AuthorizesRequests;
+
     public function index(Request $request, $companyId)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [Supplier::class, $company]);
         $suppliers = Supplier::where('company_id', $companyId)->get();
         return response()->json($suppliers);
     }
 
     public function store(Request $request, $companyId)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('create', [Supplier::class, $company]);
         $validated = $request->validate([
             'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
             'document_number' => 'required|string|max:20',
@@ -27,6 +35,10 @@ class SupplierController extends Controller
             'address' => 'nullable|string|max:200',
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer'
         ]);
+
+        if (empty($validated['email']) && empty($validated['phone'])) {
+            return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
+        }
 
         $exists = Supplier::where('company_id', $companyId)
             ->where('document_number', $validated['document_number'])
@@ -42,6 +54,9 @@ class SupplierController extends Controller
 
     public function update(Request $request, $companyId, $id)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('update', [Supplier::class, $company]);
+
         $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
 
         $validated = $request->validate([
@@ -56,12 +71,21 @@ class SupplierController extends Controller
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer'
         ]);
 
+        $email = $validated['email'] ?? $supplier->email;
+        $phone = $validated['phone'] ?? $supplier->phone;
+        if (empty($email) && empty($phone)) {
+            return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
+        }
+
         $supplier->update($validated);
         return response()->json($supplier);
     }
 
     public function destroy($companyId, $id)
     {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('delete', [Supplier::class, $company]);
+
         $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
         $supplier->delete();
         return response()->json(null, 204);

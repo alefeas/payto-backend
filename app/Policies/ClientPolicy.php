@@ -10,24 +10,24 @@ class ClientPolicy
     public function viewAny(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'accountant', 'operator']);
+        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant', 'operator']);
     }
 
     public function create(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'accountant']);
+        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant', 'operator']);
     }
 
     public function update(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'accountant']);
+        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant']);
     }
 
     public function delete(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'accountant']);
+        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant']);
     }
 }

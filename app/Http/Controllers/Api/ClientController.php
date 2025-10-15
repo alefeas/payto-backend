@@ -43,6 +43,10 @@ class ClientController extends Controller
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
 
+        if (empty($validated['email']) && empty($validated['phone'])) {
+            return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
+        }
+
         // Check for duplicate
         $existing = Client::where('company_id', $companyId)
             ->where('document_number', $validated['document_number'])
@@ -78,6 +82,12 @@ class ClientController extends Controller
             'address' => 'nullable|string',
             'tax_condition' => 'sometimes|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
+
+        $email = $validated['email'] ?? $client->email;
+        $phone = $validated['phone'] ?? $client->phone;
+        if (empty($email) && empty($phone)) {
+            return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
+        }
 
         // Check for duplicate if document_number is being changed
         if (isset($validated['document_number']) && $validated['document_number'] !== $client->document_number) {
