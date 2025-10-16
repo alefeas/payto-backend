@@ -23,6 +23,14 @@ class Invoice extends Model
         'receiver_company_id',
         'client_id',
         'supplier_id',
+        'related_invoice_id',
+        'balance_pending',
+        'payment_due_date',
+        'issuer_cbu',
+        'acceptance_status',
+        'acceptance_date',
+        'transport_data',
+        'operation_type',
         'issue_date',
         'due_date',
         'currency',
@@ -60,8 +68,10 @@ class Invoice extends Model
     protected $casts = [
         'issue_date' => 'date',
         'due_date' => 'date',
+        'payment_due_date' => 'date',
         'afip_cae_due_date' => 'date',
         'approval_date' => 'datetime',
+        'acceptance_date' => 'datetime',
         'rejected_at' => 'datetime',
         'afip_sent_at' => 'datetime',
         'declared_uncollectible_date' => 'date',
@@ -69,11 +79,13 @@ class Invoice extends Model
         'total_taxes' => 'decimal:2',
         'total_perceptions' => 'decimal:2',
         'total' => 'decimal:2',
+        'balance_pending' => 'decimal:2',
         'exchange_rate' => 'decimal:4',
         'approvals_required' => 'integer',
         'approvals_received' => 'integer',
         'requires_correction' => 'boolean',
         'dispute_opened' => 'boolean',
+        'transport_data' => 'array',
     ];
 
     public function issuerCompany(): BelongsTo
@@ -119,6 +131,40 @@ class Invoice extends Model
     public function approvals(): HasMany
     {
         return $this->hasMany(InvoiceApproval::class);
+    }
+
+    public function relatedInvoice(): BelongsTo
+    {
+        return $this->belongsTo(Invoice::class, 'related_invoice_id');
+    }
+
+    public function creditNotes(): HasMany
+    {
+        return $this->hasMany(Invoice::class, 'related_invoice_id')
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+    }
+
+    public function debitNotes(): HasMany
+    {
+        return $this->hasMany(Invoice::class, 'related_invoice_id')
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+    }
+
+    public function getAvailableBalanceAttribute(): float
+    {
+        return $this->balance_pending ?? $this->total;
+    }
+
+    public function isFullyCancelled(): bool
+    {
+        return $this->balance_pending !== null && $this->balance_pending <= 0;
+    }
+
+    public function isPartiallyCancelled(): bool
+    {
+        return $this->balance_pending !== null && 
+               $this->balance_pending > 0 && 
+               $this->balance_pending < $this->total;
     }
 
     public function getTotalPaidAttribute(): float

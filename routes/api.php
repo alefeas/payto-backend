@@ -37,4 +37,7 @@ Route::prefix('v1')->group(function () {
     
     // IVA Book routes
     require base_path('routes/api/iva-book.php');
+    
+    // Voucher routes (NC, ND, Receipts, etc.)
+    require base_path('routes/api/vouchers.php');
 });
