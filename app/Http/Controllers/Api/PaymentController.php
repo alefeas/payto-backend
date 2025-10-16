@@ -35,6 +35,11 @@ class PaymentController extends Controller
             'attachment_url' => 'nullable|string|max:500',
             'notes' => 'nullable|string',
             'status' => 'nullable|in:pending,in_process,confirmed,cancelled',
+            'retentions' => 'nullable|array',
+            'retentions.*.type' => 'required|in:vat_retention,income_tax_retention,gross_income_retention,suss_retention',
+            'retentions.*.name' => 'required|string',
+            'retentions.*.rate' => 'required|numeric|min:0|max:100',
+            'retentions.*.amount' => 'required|numeric|min:0',
         ]);
 
         $validated['company_id'] = $companyId;
@@ -45,6 +50,13 @@ class PaymentController extends Controller
         try {
             $payment = Payment::create($validated);
 
+            // Guardar retenciones si existen
+            if (isset($validated['retentions']) && count($validated['retentions']) > 0) {
+                foreach ($validated['retentions'] as $retention) {
+                    $payment->retentions()->create($retention);
+                }
+            }
+
             // If status is confirmed, update invoice status
             if ($payment->status === 'confirmed') {
                 $invoice = Invoice::find($validated['invoice_id']);
@@ -54,7 +66,7 @@ class PaymentController extends Controller
 
             DB::commit();
 
-            return response()->json($payment->load(['invoice.supplier', 'registeredBy']), 201);
+            return response()->json($payment->load(['invoice.supplier', 'registeredBy', 'retentions']), 201);
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['error' => 'Error creating payment'], 500);

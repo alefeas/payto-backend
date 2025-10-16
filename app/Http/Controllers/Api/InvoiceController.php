@@ -474,16 +474,18 @@ class InvoiceController extends Controller
             // Determinar estado inicial basado en configuración de aprobaciones
             $requiresApproval = $company->required_approvals > 0;
             
-            // Crear factura recibida (el proveedor es el emisor, tu empresa es el receptor)
+            // Crear factura recibida
+            // NOTA: issuer_company_id se usa como placeholder (mismo que receiver) para cumplir constraint
+            // El supplier_id identifica al verdadero emisor externo
             $invoice = Invoice::create([
                 'number' => $validated['invoice_number'],
                 'type' => $validated['invoice_type'],
                 'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
-                'issuer_company_id' => $companyId, // Usar companyId para cumplir unique constraint
-                'receiver_company_id' => $companyId, // Tu empresa recibe la factura
-                'supplier_id' => $supplier->id, // El proveedor
+                'issuer_company_id' => $companyId, // Placeholder para constraint
+                'receiver_company_id' => $companyId, // Tu empresa recibe
+                'supplier_id' => $supplier->id, // Emisor real (externo)
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
                 'subtotal' => $subtotal,
@@ -521,7 +523,7 @@ class InvoiceController extends Controller
 
             return response()->json([
                 'message' => 'Received invoice created successfully',
-                'invoice' => $invoice->load(['client', 'items']),
+                'invoice' => $invoice->load(['supplier', 'items']),
             ], 201);
 
         } catch (\Exception $e) {
