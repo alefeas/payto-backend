@@ -70,9 +70,12 @@ class VoucherController extends Controller
      */
     public function getCompatibleInvoices($companyId, Request $request)
     {
-        $voucherType = $request->query('voucher_type');
+        $voucherTypeCode = $request->query('voucher_type');
         
-        if (!VoucherTypeService::requiresAssociation($voucherType)) {
+        // Convertir código AFIP a clave interna
+        $voucherType = VoucherTypeService::getTypeByCode($voucherTypeCode);
+        
+        if (!$voucherType || !VoucherTypeService::requiresAssociation($voucherType)) {
             return response()->json(['invoices' => []]);
         }
         
@@ -80,28 +83,37 @@ class VoucherController extends Controller
         $types = VoucherTypeService::getVoucherTypes();
         $compatibleWith = $types[$voucherType]['compatible_with'] ?? [];
         
+        if (empty($compatibleWith)) {
+            return response()->json(['invoices' => []]);
+        }
+        
         // Buscar facturas compatibles con saldo disponible
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->whereIn('type', $compatibleWith)
-            ->whereIn('status', ['issued', 'approved', 'paid', 'partial_paid', 'partially_cancelled'])
+            ->whereIn('status', ['issued', 'approved'])
             ->where(function($query) {
                 $query->whereNull('balance_pending')
                       ->orWhere('balance_pending', '>', 0);
             })
-            ->with(['client'])
+            ->with(['client', 'receiverCompany'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->map(function($invoice) {
+                $clientName = 'Sin cliente';
+                if ($invoice->client) {
+                    $clientName = $invoice->client->business_name ?? "{$invoice->client->first_name} {$invoice->client->last_name}";
+                } elseif ($invoice->receiverCompany) {
+                    $clientName = $invoice->receiverCompany->name;
+                }
+                
                 return [
                     'id' => $invoice->id,
-                    'number' => $invoice->number,
-                    'type' => $invoice->type,
+                    'invoice_number' => $invoice->number,
+                    'invoice_type' => $invoice->type,
                     'issue_date' => $invoice->issue_date->format('Y-m-d'),
-                    'client_name' => $invoice->client ? 
-                        ($invoice->client->business_name ?? "{$invoice->client->first_name} {$invoice->client->last_name}") : 
-                        'Sin cliente',
-                    'total' => $invoice->total,
-                    'balance_pending' => $invoice->balance_pending ?? $invoice->total,
+                    'client_name' => $clientName,
+                    'total_amount' => $invoice->total,
+                    'available_balance' => $invoice->balance_pending ?? $invoice->total,
                 ];
             });
         
@@ -115,7 +127,16 @@ class VoucherController extends Controller
     {
         $company = Company::with('afipCertificate')->findOrFail($companyId);
         
-        $voucherType = $request->input('voucher_type');
+        $voucherTypeCode = $request->input('voucher_type');
+        
+        // Convertir código AFIP a clave interna
+        $voucherType = VoucherTypeService::getTypeByCode($voucherTypeCode);
+        
+        if (!$voucherType) {
+            return response()->json([
+                'message' => 'Tipo de comprobante inválido',
+            ], 422);
+        }
         
         // Validar
         $validation = $this->validationService->validateVoucher($request->all(), $voucherType);
@@ -156,6 +177,7 @@ class VoucherController extends Controller
                     Log::error('AFIP authorization failed for voucher', [
                         'company_id' => $companyId,
                         'voucher_type' => $voucherType,
+                        'voucher_type_code' => $voucherTypeCode,
                         'error' => $e->getMessage(),
                     ]);
                     
@@ -179,6 +201,7 @@ class VoucherController extends Controller
             Log::error('Voucher creation failed', [
                 'company_id' => $companyId,
                 'voucher_type' => $voucherType,
+                'voucher_type_code' => $voucherTypeCode,
                 'error' => $e->getMessage(),
             ]);
             
@@ -211,6 +234,17 @@ class VoucherController extends Controller
         }
         $total = $subtotal + $totalTaxes;
         
+        // Si tiene factura relacionada, obtener client_id de ella
+        $clientId = $data['client_id'] ?? null;
+        $receiverCompanyId = null;
+        if (isset($data['related_invoice_id'])) {
+            $relatedInvoice = Invoice::find($data['related_invoice_id']);
+            if ($relatedInvoice) {
+                $clientId = $relatedInvoice->client_id;
+                $receiverCompanyId = $relatedInvoice->receiver_company_id;
+            }
+        }
+        
         // Crear comprobante
         $voucher = Invoice::create([
             'number' => sprintf('%04d-%08d', $data['sales_point'], $voucherNumber),
@@ -219,7 +253,8 @@ class VoucherController extends Controller
             'voucher_number' => $voucherNumber,
             'concept' => 'products',
             'issuer_company_id' => $company->id,
-            'client_id' => $data['client_id'],
+            'client_id' => $clientId,
+            'receiver_company_id' => $receiverCompanyId,
             'related_invoice_id' => $data['related_invoice_id'] ?? null,
             'issue_date' => $data['issue_date'],
             'due_date' => $data['due_date'] ?? now()->addDays(30),
