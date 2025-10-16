@@ -50,9 +50,36 @@ class AfipInvoiceService
     }
 
     /**
-     * Authorize invoice with AFIP and get CAE
+     * Authorize voucher with AFIP and get CAE (supports all voucher types)
      */
     public function authorizeInvoice(Invoice $invoice): array
+    {
+        try {
+            $webService = $this->getWebServiceForType($invoice->type);
+            
+            // Usar Web Service específico según tipo
+            switch ($webService) {
+                case 'WSFEX':
+                    return $this->authorizeFCEMipyme($invoice);
+                case 'WSCTG':
+                    return $this->authorizeRemito($invoice);
+                default:
+                    return $this->authorizeStandardVoucher($invoice);
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to authorize voucher with AFIP', [
+                'invoice_id' => $invoice->id,
+                'type' => $invoice->type,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+    }
+
+    /**
+     * Authorize standard voucher (Facturas, NC, ND, Recibos)
+     */
+    private function authorizeStandardVoucher(Invoice $invoice): array
     {
         try {
             $soapClient = $this->client->getWSFEClient();
@@ -86,15 +113,29 @@ class AfipInvoiceService
                 'cae_expiration' => Carbon::createFromFormat('Ymd', $detail->CAEFchVto)->format('Y-m-d'),
                 'afip_result' => $detail->Resultado,
             ];
-            
         } catch (\Exception $e) {
-            Log::error('Failed to authorize invoice with AFIP', [
-                'invoice_id' => $invoice->id,
-                'company_id' => $this->company->id,
-                'error' => $e->getMessage(),
-            ]);
             throw $e;
         }
+    }
+
+    /**
+     * Authorize FCE MiPyME (Factura de Crédito Electrónica)
+     */
+    private function authorizeFCEMipyme(Invoice $invoice): array
+    {
+        // TODO: Implementar Web Service WSFEX
+        // Por ahora usar WSFE estándar
+        return $this->authorizeStandardVoucher($invoice);
+    }
+
+    /**
+     * Authorize Remito Electrónico
+     */
+    private function authorizeRemito(Invoice $invoice): array
+    {
+        // TODO: Implementar Web Service WSCTG
+        // Los remitos no tienen CAE tradicional, usan CTG (Código de Trazabilidad)
+        throw new \Exception('Remitos electrónicos requieren implementación de WSCTG');
     }
 
     /**
@@ -111,6 +152,45 @@ class AfipInvoiceService
         $taxAmount = $invoice->total_taxes;
         $exemptAmount = 0;
 
+        $detRequest = [
+            'Concepto' => $concept,
+            'DocTipo' => $docType,
+            'DocNro' => $this->cleanDocumentNumber($invoice->client->document_number),
+            'CbteDesde' => $invoice->voucher_number,
+            'CbteHasta' => $invoice->voucher_number,
+            'CbteFch' => $invoice->issue_date->format('Ymd'),
+            'ImpTotal' => $total,
+            'ImpTotConc' => 0,
+            'ImpNeto' => $netAmount,
+            'ImpOpEx' => $exemptAmount,
+            'ImpIVA' => $taxAmount,
+            'ImpTrib' => $invoice->total_perceptions,
+            'MonId' => 'PES',
+            'MonCotiz' => 1,
+            'Iva' => $this->buildIvaArray($invoice),
+            'Tributos' => $this->buildTributosArray($invoice),
+        ];
+
+        // Agregar comprobante asociado para NC/ND
+        $category = \App\Services\VoucherTypeService::getCategory($invoice->type);
+        if (in_array($category, ['credit_note', 'debit_note']) && $invoice->related_invoice_id) {
+            $relatedInvoice = Invoice::find($invoice->related_invoice_id);
+            if ($relatedInvoice) {
+                $detRequest['CbtesAsoc'] = [
+                    'CbteAsoc' => [
+                        'Tipo' => $this->getAfipInvoiceType($relatedInvoice->type),
+                        'PtoVta' => $relatedInvoice->sales_point,
+                        'Nro' => $relatedInvoice->voucher_number,
+                    ],
+                ];
+            }
+        }
+
+        // Agregar fecha de vencimiento para FCE MiPyME
+        if ($category === 'fce_mipyme' && $invoice->payment_due_date) {
+            $detRequest['FchVtoPago'] = $invoice->payment_due_date->format('Ymd');
+        }
+
         return [
             'FeCabReq' => [
                 'CantReg' => 1,
@@ -118,42 +198,43 @@ class AfipInvoiceService
                 'CbteTipo' => $invoiceType,
             ],
             'FeDetReq' => [
-                'FECAEDetRequest' => [
-                    'Concepto' => $concept,
-                    'DocTipo' => $docType,
-                    'DocNro' => $this->cleanDocumentNumber($invoice->client->document_number),
-                    'CbteDesde' => $invoice->voucher_number,
-                    'CbteHasta' => $invoice->voucher_number,
-                    'CbteFch' => $invoice->issue_date->format('Ymd'),
-                    'ImpTotal' => $total,
-                    'ImpTotConc' => 0,
-                    'ImpNeto' => $netAmount,
-                    'ImpOpEx' => $exemptAmount,
-                    'ImpIVA' => $taxAmount,
-                    'ImpTrib' => $invoice->total_perceptions,
-                    'MonId' => 'PES',
-                    'MonCotiz' => 1,
-                    'Iva' => $this->buildIvaArray($invoice),
-                    'Tributos' => $this->buildTributosArray($invoice),
-                ],
+                'FECAEDetRequest' => $detRequest,
             ],
         ];
     }
 
     /**
-     * Get AFIP invoice type code
+     * Get AFIP invoice type code from VoucherTypeService
      */
     private function getAfipInvoiceType(string $invoiceType): int
     {
-        $types = [
-            'A' => 1,
-            'B' => 6,
-            'C' => 11,
-            'E' => 19,
-            'M' => 51,
-        ];
+        return (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
+    }
 
-        return $types[$invoiceType] ?? 6;
+    /**
+     * Determine which AFIP Web Service to use based on voucher type
+     */
+    private function getWebServiceForType(string $type): string
+    {
+        $category = \App\Services\VoucherTypeService::getCategory($type);
+        
+        // FCE MiPyME usa Web Service específico
+        if ($category === 'fce_mipyme') {
+            return 'WSFEX'; // Factura de Crédito Electrónica
+        }
+        
+        // Remitos usan Web Service de Código de Trazabilidad de Granos
+        if ($category === 'remito') {
+            return 'WSCTG'; // Código de Trazabilidad de Granos
+        }
+        
+        // Liquidaciones usan Web Service específico
+        if (in_array($category, ['used_goods', 'used_goods_purchase'])) {
+            return 'WSFE'; // Mismo que facturas normales
+        }
+        
+        // Facturas, NC, ND, Recibos usan WSFE (Web Service de Facturación Electrónica)
+        return 'WSFE';
     }
 
     /**
