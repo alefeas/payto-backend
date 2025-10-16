@@ -49,12 +49,18 @@ class VoucherValidationService
     private function getBaseRules(string $type): array
     {
         $hasAmounts = VoucherTypeService::hasAmounts($type);
+        $category = VoucherTypeService::getCategory($type);
+        $isAssociatedNote = in_array($category, ['credit_note', 'debit_note']);
         
         $rules = [
-            'client_id' => 'required_without:client_data|exists:clients,id',
             'sales_point' => 'required|integer|min:1|max:9999',
             'issue_date' => 'required|date',
         ];
+        
+        // Solo requerir cliente si NO es una nota asociada (se toma de la factura)
+        if (!$isAssociatedNote) {
+            $rules['client_id'] = 'required_without:client_data|exists:clients,id';
+        }
         
         if ($hasAmounts) {
             $rules = array_merge($rules, [
@@ -131,9 +137,66 @@ class VoucherValidationService
             return ['valid' => false, 'errors' => ['related_invoice_id' => ['Factura no encontrada']]];
         }
         
+        // Validar que sea una factura (no otra NC/ND)
+        $relatedCategory = VoucherTypeService::getCategory($relatedInvoice->type);
+        if (in_array($relatedCategory, ['credit_note', 'debit_note'])) {
+            return [
+                'valid' => false,
+                'errors' => [
+                    'related_invoice_id' => [
+                        'No se puede asociar una NC/ND a otra NC/ND. Debe asociarse a la factura original.'
+                    ]
+                ]
+            ];
+        }
+        
+        // Validar que la factura tenga CAE válido (solo si no es ambiente de testing)
+        $requireCae = config('afip.require_cae_for_notes', true);
+        if ($requireCae && (!$relatedInvoice->afip_cae || $relatedInvoice->afip_status !== 'approved')) {
+            return [
+                'valid' => false,
+                'errors' => [
+                    'related_invoice_id' => [
+                        'No se puede emitir NC/ND sobre una factura sin CAE válido. La factura debe estar autorizada por AFIP.'
+                    ]
+                ]
+            ];
+        }
+        
+        // Validar que la factura no esté anulada
+        if ($relatedInvoice->status === 'cancelled' || ($relatedInvoice->balance_pending !== null && $relatedInvoice->balance_pending <= 0)) {
+            return [
+                'valid' => false, 
+                'errors' => [
+                    'related_invoice_id' => [
+                        'No se puede asociar una factura anulada (saldo $0). La factura ya fue anulada completamente.'
+                    ]
+                ]
+            ];
+        }
+        
         // Validar compatibilidad de tipos
         if (!VoucherTypeService::isCompatibleWith($type, $relatedInvoice->type)) {
             return ['valid' => false, 'errors' => ['type' => ['Tipo de comprobante incompatible con la factura original']]];
+        }
+        
+        // Validar fecha: NC/ND debe ser igual o posterior a la factura
+        $invoiceDate = \Carbon\Carbon::parse($relatedInvoice->issue_date);
+        $voucherDate = \Carbon\Carbon::parse($data['issue_date']);
+        
+        if ($voucherDate->lt($invoiceDate)) {
+            return [
+                'valid' => false, 
+                'errors' => [
+                    'issue_date' => [
+                        sprintf(
+                            'La fecha de la nota (%s) no puede ser anterior a la fecha de la factura (%s)',
+                            $voucherDate->format('d/m/Y'),
+                            $invoiceDate->format('d/m/Y')
+                        )
+                    ]
+                ]
+            ];
         }
         
         // Validar monto disponible

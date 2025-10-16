@@ -87,13 +87,13 @@ class VoucherController extends Controller
             return response()->json(['invoices' => []]);
         }
         
-        // Buscar facturas compatibles con saldo disponible
+        // Buscar facturas compatibles con saldo disponible (excluir anuladas)
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->whereIn('type', $compatibleWith)
-            ->whereIn('status', ['issued', 'approved'])
+            ->whereIn('status', ['issued', 'approved', 'partially_cancelled']) // Excluir 'cancelled'
             ->where(function($query) {
                 $query->whereNull('balance_pending')
-                      ->orWhere('balance_pending', '>', 0);
+                      ->orWhere('balance_pending', '>', 0); // Solo con saldo disponible
             })
             ->with(['client', 'receiverCompany'])
             ->orderBy('issue_date', 'desc')
@@ -126,6 +126,15 @@ class VoucherController extends Controller
     public function store(Request $request, $companyId)
     {
         $company = Company::with('afipCertificate')->findOrFail($companyId);
+        
+        // TODO: Descomentar en producción
+        // Validar que tenga certificado AFIP activo
+        // if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+        //     return response()->json([
+        //         'message' => 'No se puede emitir comprobantes sin certificado AFIP',
+        //         'error' => 'Debes subir y activar tu certificado AFIP desde Configuración → AFIP/ARCA para poder emitir comprobantes electrónicos.',
+        //     ], 403);
+        // }
         
         $voucherTypeCode = $request->input('voucher_type');
         
@@ -161,6 +170,7 @@ class VoucherController extends Controller
             // Solicitar CAE a AFIP
             if ($company->afipCertificate && $company->afipCertificate->is_active) {
                 try {
+                    $voucher->load('perceptions');
                     $afipService = new AfipInvoiceService($company);
                     $afipResult = $afipService->authorizeInvoice($voucher);
                     
@@ -192,7 +202,7 @@ class VoucherController extends Controller
             
             return response()->json([
                 'message' => 'Comprobante creado exitosamente',
-                'voucher' => $voucher->load(['client', 'items', 'relatedInvoice']),
+                'voucher' => $voucher->load(['client', 'items', 'relatedInvoice', 'perceptions']),
             ], 201);
             
         } catch (\Exception $e) {
@@ -232,16 +242,33 @@ class VoucherController extends Controller
             $subtotal += $itemSubtotal;
             $totalTaxes += $itemTax;
         }
-        $total = $subtotal + $totalTaxes;
         
-        // Si tiene factura relacionada, obtener client_id de ella
+        // Calcular percepciones
+        $totalPerceptions = 0;
+        if (isset($data['perceptions'])) {
+            foreach ($data['perceptions'] as $perception) {
+                $baseAmount = $perception['type'] === 'vat_perception' 
+                    ? $totalTaxes 
+                    : ($subtotal + $totalTaxes);
+                $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
+            }
+        }
+        
+        $total = $subtotal + $totalTaxes + $totalPerceptions;
+        
+        // Si tiene factura relacionada, obtener client_id y moneda de ella
         $clientId = $data['client_id'] ?? null;
         $receiverCompanyId = null;
+        $currency = $data['currency'] ?? 'ARS';
+        $exchangeRate = $data['exchange_rate'] ?? 1;
+        
         if (isset($data['related_invoice_id'])) {
             $relatedInvoice = Invoice::find($data['related_invoice_id']);
             if ($relatedInvoice) {
                 $clientId = $relatedInvoice->client_id;
                 $receiverCompanyId = $relatedInvoice->receiver_company_id;
+                $currency = $relatedInvoice->currency; // Tomar moneda de la factura
+                $exchangeRate = $relatedInvoice->exchange_rate; // Tomar tipo de cambio
             }
         }
         
@@ -260,10 +287,10 @@ class VoucherController extends Controller
             'due_date' => $data['due_date'] ?? now()->addDays(30),
             'subtotal' => $subtotal,
             'total_taxes' => $totalTaxes,
-            'total_perceptions' => 0,
+            'total_perceptions' => $totalPerceptions,
             'total' => $total,
-            'currency' => $data['currency'] ?? 'ARS',
-            'exchange_rate' => $data['exchange_rate'] ?? 1,
+            'currency' => $currency,
+            'exchange_rate' => $exchangeRate,
             'notes' => $data['notes'] ?? null,
             'status' => 'pending_approval',
             'afip_status' => 'pending',
@@ -289,6 +316,24 @@ class VoucherController extends Controller
             ]);
         }
         
+        // Crear percepciones
+        if (isset($data['perceptions'])) {
+            foreach ($data['perceptions'] as $perception) {
+                $baseAmount = $perception['type'] === 'vat_perception' 
+                    ? $totalTaxes 
+                    : ($subtotal + $totalTaxes);
+                $amount = $baseAmount * ($perception['rate'] / 100);
+
+                $voucher->perceptions()->create([
+                    'type' => $perception['type'],
+                    'name' => $perception['name'],
+                    'rate' => $perception['rate'],
+                    'base_amount' => $baseAmount,
+                    'amount' => $amount,
+                ]);
+            }
+        }
+        
         return $voucher;
     }
 
@@ -299,18 +344,55 @@ class VoucherController extends Controller
             return;
         }
         
-        // Actualizar saldo
-        if ($category === 'credit_note') {
-            $relatedInvoice->balance_pending = ($relatedInvoice->balance_pending ?? $relatedInvoice->total) - $voucher->total;
-        } else if ($category === 'debit_note') {
-            $relatedInvoice->balance_pending = ($relatedInvoice->balance_pending ?? $relatedInvoice->total) + $voucher->total;
+        // Calcular saldo actual si no existe
+        if ($relatedInvoice->balance_pending === null) {
+            $relatedInvoice->balance_pending = $relatedInvoice->total;
         }
         
-        // Actualizar estado
-        if ($relatedInvoice->balance_pending <= 0) {
+        // Actualizar saldo según tipo de nota
+        if ($category === 'credit_note') {
+            $relatedInvoice->balance_pending -= $voucher->total;
+        } else if ($category === 'debit_note') {
+            $relatedInvoice->balance_pending += $voucher->total;
+        }
+        
+        // Redondear para evitar problemas de precisión
+        $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
+        
+        // Actualizar estado según el saldo
+        if ($relatedInvoice->balance_pending <= 0.01) { // Tolerancia de 1 centavo
             $relatedInvoice->status = 'cancelled';
+            $relatedInvoice->balance_pending = 0;
+            
+            // Agregar nota automática
+            $noteType = $category === 'credit_note' ? 'Nota de Crédito' : 'Nota de Débito';
+            $existingNotes = $relatedInvoice->notes ?? '';
+            $newNote = "\n[" . now()->format('Y-m-d H:i') . "] Anulada automáticamente por {$noteType} {$voucher->number} por el total.";
+            $relatedInvoice->notes = $existingNotes . $newNote;
+            
+            Log::info('Invoice automatically cancelled by credit note', [
+                'invoice_id' => $relatedInvoice->id,
+                'invoice_number' => $relatedInvoice->number,
+                'voucher_id' => $voucher->id,
+                'voucher_number' => $voucher->number,
+                'voucher_type' => $voucher->type,
+            ]);
         } else if ($relatedInvoice->balance_pending < $relatedInvoice->total) {
+            // Anulación parcial
             $relatedInvoice->status = 'partially_cancelled';
+            
+            $noteType = $category === 'credit_note' ? 'Nota de Crédito' : 'Nota de Débito';
+            $existingNotes = $relatedInvoice->notes ?? '';
+            $newNote = "\n[" . now()->format('Y-m-d H:i') . "] Ajustada por {$noteType} {$voucher->number}. Nuevo saldo: $" . number_format($relatedInvoice->balance_pending, 2) . ".";
+            $relatedInvoice->notes = $existingNotes . $newNote;
+            
+            Log::info('Invoice partially cancelled', [
+                'invoice_id' => $relatedInvoice->id,
+                'invoice_number' => $relatedInvoice->number,
+                'voucher_id' => $voucher->id,
+                'voucher_number' => $voucher->number,
+                'new_balance' => $relatedInvoice->balance_pending,
+            ]);
         }
         
         $relatedInvoice->save();

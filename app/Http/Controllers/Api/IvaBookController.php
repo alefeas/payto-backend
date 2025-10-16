@@ -34,13 +34,16 @@ class IvaBookController extends Controller
         $month = $request->input('month');
         $year = $request->input('year');
 
-        // Obtener facturas emitidas del período (identificadas por client_id)
+        // Obtener facturas emitidas del período (incluye NC/ND asociadas)
         $invoices = Invoice::where('issuer_company_id', $companyId)
-            ->whereNotNull('client_id') // Solo facturas emitidas a clientes
+            ->where(function($q) {
+                $q->whereNotNull('client_id') // Facturas con cliente directo
+                  ->orWhereNotNull('related_invoice_id'); // O NC/ND asociadas
+            })
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
-            ->whereIn('status', ['issued', 'approved', 'paid', 'partial_paid'])
-            ->with(['client', 'items', 'perceptions'])
+            ->whereIn('status', ['issued', 'approved', 'paid', 'partial_paid', 'pending_approval'])
+            ->with(['client', 'items', 'perceptions', 'relatedInvoice.client'])
             ->orderBy('issue_date')
             ->orderBy('voucher_number')
             ->get();
@@ -60,10 +63,16 @@ class IvaBookController extends Controller
         ];
 
         foreach ($invoices as $invoice) {
+            // Obtener cliente (directo o de factura relacionada)
+            $client = $invoice->client ?? $invoice->relatedInvoice?->client;
             $clientName = 'Sin cliente';
-            if ($invoice->client) {
-                $clientName = $invoice->client->business_name ?? trim(($invoice->client->first_name ?? '') . ' ' . ($invoice->client->last_name ?? '')) ?: 'Sin nombre';
+            if ($client) {
+                $clientName = $client->business_name ?? trim(($client->first_name ?? '') . ' ' . ($client->last_name ?? '')) ?: 'Sin nombre';
             }
+            
+            // NC resta, ND/Factura suma
+            $isCredit = str_starts_with($invoice->type, 'NC');
+            $multiplier = $isCredit ? -1 : 1;
             
             $record = [
                 'fecha' => $invoice->issue_date->format('d/m/Y'),
@@ -71,7 +80,7 @@ class IvaBookController extends Controller
                 'punto_venta' => str_pad($invoice->sales_point, 4, '0', STR_PAD_LEFT),
                 'numero' => str_pad($invoice->voucher_number, 8, '0', STR_PAD_LEFT),
                 'cliente' => $clientName,
-                'cuit' => $invoice->client ? $invoice->client->document_number : '00000000000',
+                'cuit' => $client ? $client->document_number : '00000000000',
                 'neto_gravado' => 0,
                 'iva_21' => 0,
                 'iva_105' => 0,
@@ -80,14 +89,14 @@ class IvaBookController extends Controller
                 'iva_5' => 0,
                 'exento' => 0,
                 'no_gravado' => 0,
-                'percepciones' => $invoice->total_perceptions ?? 0,
-                'total' => $invoice->total,
+                'percepciones' => ($invoice->total_perceptions ?? 0) * $multiplier,
+                'total' => $invoice->total * $multiplier,
             ];
 
             // Agrupar por alícuota
             foreach ($invoice->items as $item) {
-                $itemSubtotal = $item->subtotal;
-                $itemTax = $item->tax_amount;
+                $itemSubtotal = $item->subtotal * $multiplier;
+                $itemTax = $item->tax_amount * $multiplier;
 
                 if ($item->tax_rate == 21) {
                     $record['neto_gravado'] += $itemSubtotal;
@@ -200,6 +209,10 @@ class IvaBookController extends Controller
                 $supplierName = $invoice->supplier->business_name ?? trim(($invoice->supplier->first_name ?? '') . ' ' . ($invoice->supplier->last_name ?? '')) ?: 'Sin nombre';
             }
             
+            // En COMPRAS: NC suma (te devuelven IVA), ND resta (te cobran más IVA)
+            $isCredit = str_starts_with($invoice->type, 'NC');
+            $multiplier = $isCredit ? 1 : ($invoice->type[0] === 'N' && $invoice->type[1] === 'D' ? -1 : 1);
+            
             $record = [
                 'fecha' => $invoice->issue_date->format('d/m/Y'),
                 'tipo' => $invoice->type,
@@ -215,15 +228,15 @@ class IvaBookController extends Controller
                 'iva_5' => 0,
                 'exento' => 0,
                 'no_gravado' => 0,
-                'percepciones' => $invoice->total_perceptions ?? 0,
-                'retenciones' => $retentions,
-                'total' => $invoice->total,
+                'percepciones' => ($invoice->total_perceptions ?? 0) * $multiplier,
+                'retenciones' => $retentions * $multiplier,
+                'total' => $invoice->total * $multiplier,
             ];
 
             // Agrupar por alícuota
             foreach ($invoice->items as $item) {
-                $itemSubtotal = $item->subtotal;
-                $itemTax = $item->tax_amount;
+                $itemSubtotal = $item->subtotal * $multiplier;
+                $itemTax = $item->tax_amount * $multiplier;
 
                 if ($item->tax_rate == 21) {
                     $record['neto_gravado'] += $itemSubtotal;

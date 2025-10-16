@@ -79,17 +79,19 @@ class InvoiceController extends Controller
         
         $this->authorize('create', [Invoice::class, $company]);
 
+        // TODO: Descomentar en producción
         // Validar que tenga certificado AFIP activo
-        if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
-            return response()->json([
-                'message' => 'No se puede emitir facturas sin certificado AFIP',
-                'error' => 'Debes subir y activar tu certificado AFIP desde Configuración → AFIP/ARCA para poder emitir facturas electrónicas.',
-            ], 403);
-        }
+        // if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+        //     return response()->json([
+        //         'message' => 'No se puede emitir facturas sin certificado AFIP',
+        //         'error' => 'Debes subir y activar tu certificado AFIP desde Configuración → AFIP/ARCA para poder emitir facturas electrónicas.',
+        //     ], 403);
+        // }
 
         $validated = $request->validate([
-            'client_id' => 'required_without:client_data|exists:clients,id',
-            'client_data' => 'required_without:client_id|array',
+            'client_id' => 'required_without_all:client_data,receiver_company_id|exists:clients,id',
+            'receiver_company_id' => 'nullable|exists:companies,id',
+            'client_data' => 'required_without_all:client_id,receiver_company_id|array',
             'client_data.document_type' => 'required_with:client_data|in:CUIT,CUIL,DNI,Pasaporte,CDI',
             'client_data.document_number' => 'required_with:client_data|string',
             'client_data.business_name' => 'nullable|string',
@@ -98,7 +100,7 @@ class InvoiceController extends Controller
             'client_data.email' => 'nullable|email',
             'client_data.tax_condition' => 'required_with:client_data|in:registered_taxpayer,monotax,exempt,final_consumer',
             'save_client' => 'boolean',
-            'invoice_type' => 'required|in:A,B,C,E',
+            'invoice_type' => 'required|string',
             'sales_point' => 'required|integer|min:1|max:9999',
             'issue_date' => 'required|date',
             'due_date' => 'nullable|date|after_or_equal:issue_date',
@@ -111,7 +113,7 @@ class InvoiceController extends Controller
             'items.*.unit_price' => 'required|numeric|min:0',
             'items.*.tax_rate' => 'required|numeric|min:0|max:100',
             'perceptions' => 'nullable|array',
-            'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,suss_perception',
+            'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,social_security_perception',
             'perceptions.*.name' => 'required|string',
             'perceptions.*.rate' => 'required|numeric|min:0|max:100',
         ]);
@@ -171,7 +173,8 @@ class InvoiceController extends Controller
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
                 'issuer_company_id' => $companyId,
-                'client_id' => $validated['client_id'],
+                'receiver_company_id' => $validated['receiver_company_id'] ?? null,
+                'client_id' => $validated['client_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),
                 'subtotal' => $subtotal,
@@ -224,6 +227,7 @@ class InvoiceController extends Controller
             // Auto-authorize with AFIP if certificate is configured
             if ($company->afipCertificate && $company->afipCertificate->is_active) {
                 try {
+                    $invoice->load('perceptions');
                     $afipService = new AfipInvoiceService($company);
                     $afipResult = $afipService->authorizeInvoice($invoice);
                     
@@ -267,7 +271,7 @@ class InvoiceController extends Controller
 
             return response()->json([
                 'message' => 'Invoice created successfully',
-                'invoice' => $invoice->load(['client', 'items']),
+                'invoice' => $invoice->load(['client', 'items', 'perceptions']),
             ], 201);
 
         } catch (\Exception $e) {

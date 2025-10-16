@@ -2,12 +2,15 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class InvoicePerception extends Model
 {
-    use HasFactory;
+    use HasFactory, HasUuids;
+    
+    public $timestamps = true;
 
     protected $fillable = [
         'invoice_id',

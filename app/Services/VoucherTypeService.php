@@ -118,4 +118,35 @@ class VoucherTypeService
         
         return $types;
     }
+
+    public static function canBeAnulled(string $type): bool
+    {
+        // Solo facturas y FCE pueden anularse con NC
+        $category = self::getCategory($type);
+        return in_array($category, ['invoice', 'fce_mipyme']);
+    }
+
+    public static function getCreditNoteType(string $invoiceType): ?string
+    {
+        $map = [
+            'A' => 'NCA', 'B' => 'NCB', 'C' => 'NCC', 'M' => 'NCM', 'E' => 'NCE',
+            'FCEA' => 'NCFCEA', 'FCEB' => 'NCFCEB', 'FCEC' => 'NCFCEC',
+        ];
+        return $map[$invoiceType] ?? null;
+    }
+
+    public static function getDebitNoteType(string $invoiceType): ?string
+    {
+        $map = [
+            'A' => 'NDA', 'B' => 'NDB', 'C' => 'NDC', 'M' => 'NDM', 'E' => 'NDE',
+            'FCEA' => 'NDFCEA', 'FCEB' => 'NDFCEB', 'FCEC' => 'NDFCEC',
+        ];
+        return $map[$invoiceType] ?? null;
+    }
+
+    public static function getName(string $type): string
+    {
+        $types = self::getVoucherTypes();
+        return $types[$type]['name'] ?? $type;
+    }
 }

@@ -387,7 +387,7 @@ class AfipInvoiceService
         $types = [
             'vat_perception' => 1, // Percepción IVA
             'gross_income_perception' => 2, // Percepción IIBB
-            'suss_perception' => 6, // Percepción SUSS
+            'social_security_perception' => 6, // Percepción SUSS
         ];
 
         return $types[$type] ?? 99; // 99 = Otros
