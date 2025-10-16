@@ -15,6 +15,9 @@ class AfipWebServiceClient
     
     private const WSFE_WSDL_TESTING = 'https://wswhomo.afip.gov.ar/wsfev1/service.asmx?WSDL';
     private const WSFE_WSDL_PRODUCTION = 'https://servicios1.afip.gov.ar/wsfev1/service.asmx?WSDL';
+    
+    private const WSFEX_WSDL_TESTING = 'https://wswhomo.afip.gov.ar/wsfexv1/service.asmx?WSDL';
+    private const WSFEX_WSDL_PRODUCTION = 'https://servicios1.afip.gov.ar/wsfexv1/service.asmx?WSDL';
 
     private CompanyAfipCertificate $certificate;
     private string $service;
@@ -162,6 +165,23 @@ XML;
         $wsdl = $this->certificate->environment === 'production'
             ? self::WSFE_WSDL_PRODUCTION
             : self::WSFE_WSDL_TESTING;
+
+        return new \SoapClient($wsdl, [
+            'soap_version' => SOAP_1_2,
+            'location' => str_replace('?WSDL', '', $wsdl),
+            'trace' => 1,
+            'exceptions' => true,
+        ]);
+    }
+
+    /**
+     * Get SOAP client for WSFEX service (FCE MiPyME)
+     */
+    public function getWSFEXClient(): \SoapClient
+    {
+        $wsdl = $this->certificate->environment === 'production'
+            ? self::WSFEX_WSDL_PRODUCTION
+            : self::WSFEX_WSDL_TESTING;
 
         return new \SoapClient($wsdl, [
             'soap_version' => SOAP_1_2,

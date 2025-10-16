@@ -123,9 +123,79 @@ class AfipInvoiceService
      */
     private function authorizeFCEMipyme(Invoice $invoice): array
     {
-        // TODO: Implementar Web Service WSFEX
-        // Por ahora usar WSFE estándar
-        return $this->authorizeStandardVoucher($invoice);
+        if (!$invoice->payment_due_date) {
+            throw new \Exception('FCE MiPyME requiere fecha de vencimiento de pago');
+        }
+
+        $cbu = $invoice->issuer_cbu ?? $this->company->cbu;
+        if (!$cbu) {
+            throw new \Exception('FCE MiPyME requiere CBU del emisor');
+        }
+
+        try {
+            $client = new AfipWebServiceClient($this->company->afipCertificate, 'wsfex');
+            $soapClient = $client->getWSFEXClient();
+            $auth = $client->getAuthArray();
+
+            $invoiceType = $this->getAfipInvoiceType($invoice->type);
+            $docType = $this->getAfipDocType($invoice->client);
+
+            $fceData = [
+                'Auth' => $auth,
+                'Cmp' => [
+                    'Id' => 1,
+                    'Tipo_cbte' => $invoiceType,
+                    'Punto_vta' => $invoice->sales_point,
+                    'Cbte_nro' => $invoice->voucher_number,
+                    'Fecha_cbte' => $invoice->issue_date->format('Ymd'),
+                    'Imp_total' => $invoice->total,
+                    'Imp_tot_conc' => 0,
+                    'Imp_neto' => $invoice->subtotal,
+                    'Imp_iva' => $invoice->total_taxes,
+                    'Imp_trib' => $invoice->total_perceptions,
+                    'Imp_op_ex' => 0,
+                    'Fecha_cbte_hasta' => $invoice->issue_date->format('Ymd'),
+                    'Fecha_venc_pago' => $invoice->payment_due_date->format('Ymd'),
+                    'Mon_id' => 'PES',
+                    'Mon_cotiz' => 1,
+                    'Concepto' => 1,
+                    'Tipo_doc' => $docType,
+                    'Nro_doc' => $this->cleanDocumentNumber($invoice->client->document_number),
+                    'Cbu' => $cbu,
+                    'Iva' => $this->buildIvaArrayFEX($invoice),
+                ],
+            ];
+
+            $response = $soapClient->FEXAuthorize($fceData);
+            $result = $response->FEXAuthorizeResult;
+
+            if (isset($result->Errors) && $result->Errors) {
+                throw new \Exception('AFIP rechazó FCE: ' . $result->Errors->Err->Msg);
+            }
+
+            return [
+                'cae' => $result->Cae,
+                'cae_expiration' => Carbon::createFromFormat('Ymd', $result->Fch_venc_Cae)->format('Y-m-d'),
+                'afip_result' => 'A',
+            ];
+        } catch (\Exception $e) {
+            throw $e;
+        }
+    }
+
+    private function buildIvaArrayFEX(Invoice $invoice): ?array
+    {
+        if ($invoice->total_taxes <= 0) {
+            return null;
+        }
+
+        return [
+            [
+                'Id' => 5,
+                'Base_imp' => $invoice->subtotal,
+                'Importe' => $invoice->total_taxes,
+            ],
+        ];
     }
 
     /**
