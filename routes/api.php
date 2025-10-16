@@ -40,4 +40,7 @@ Route::prefix('v1')->group(function () {
     
     // Voucher routes (NC, ND, Receipts, etc.)
     require base_path('routes/api/vouchers.php');
+    
+    // Analytics routes
+    require base_path('routes/api/analytics.php');
 });
