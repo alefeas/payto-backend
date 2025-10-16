@@ -92,10 +92,23 @@ class AfipCertificateController extends Controller
             $request->input('environment', 'testing')
         );
 
+        // Actualizar condición fiscal desde AFIP
+        try {
+            $afipData = app(\App\Services\Afip\AfipVerificationService::class)
+                ->getContribuyenteData($company->national_id, $company);
+            
+            if ($afipData && isset($afipData['tax_condition'])) {
+                $company->update(['tax_condition' => $afipData['tax_condition']]);
+            }
+        } catch (\Exception $e) {
+            \Log::warning('No se pudo actualizar condición fiscal desde AFIP: ' . $e->getMessage());
+        }
+
         return $this->success([
             'id' => $certificate->id,
             'isActive' => $certificate->is_active,
             'validUntil' => $certificate->valid_until?->toIso8601String(),
+            'taxCondition' => $company->tax_condition,
         ], 'Certificado subido exitosamente');
     }
 
@@ -122,10 +135,23 @@ class AfipCertificateController extends Controller
             $request->input('environment', 'testing')
         );
 
+        // Actualizar condición fiscal desde AFIP
+        try {
+            $afipData = app(\App\Services\Afip\AfipVerificationService::class)
+                ->getContribuyenteData($company->national_id, $company);
+            
+            if ($afipData && isset($afipData['tax_condition'])) {
+                $company->update(['tax_condition' => $afipData['tax_condition']]);
+            }
+        } catch (\Exception $e) {
+            \Log::warning('No se pudo actualizar condición fiscal desde AFIP: ' . $e->getMessage());
+        }
+
         return $this->success([
             'id' => $certificate->id,
             'isActive' => $certificate->is_active,
             'validUntil' => $certificate->valid_until?->toIso8601String(),
+            'taxCondition' => $company->tax_condition,
         ], 'Certificado subido exitosamente');
     }
 
@@ -144,6 +170,33 @@ class AfipCertificateController extends Controller
         }
 
         return $this->error($result['message'], 400);
+    }
+
+    public function updateTaxCondition(string $companyId): JsonResponse
+    {
+        $company = Company::whereHas('members', function ($query) {
+            $query->where('user_id', auth()->id())
+                  ->whereIn('role', ['owner', 'administrator'])
+                  ->where('is_active', true);
+        })->findOrFail($companyId);
+
+        try {
+            $afipData = app(\App\Services\Afip\AfipVerificationService::class)
+                ->getContribuyenteData($company->national_id, $company);
+            
+            if (!$afipData || !isset($afipData['tax_condition'])) {
+                return $this->error('No se pudo obtener la condición fiscal desde AFIP', 400);
+            }
+
+            $company->update(['tax_condition' => $afipData['tax_condition']]);
+
+            return $this->success([
+                'taxCondition' => $company->tax_condition,
+                'businessName' => $afipData['business_name'] ?? null,
+            ], 'Condición fiscal actualizada desde AFIP');
+        } catch (\Exception $e) {
+            return $this->error('Error al consultar AFIP: ' . $e->getMessage(), 500);
+        }
     }
 
     public function destroy(string $companyId): JsonResponse

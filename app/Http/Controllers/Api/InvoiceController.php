@@ -79,6 +79,14 @@ class InvoiceController extends Controller
         
         $this->authorize('create', [Invoice::class, $company]);
 
+        // Validar que tenga certificado AFIP activo
+        if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+            return response()->json([
+                'message' => 'No se puede emitir facturas sin certificado AFIP',
+                'error' => 'Debes subir y activar tu certificado AFIP desde Configuración → AFIP/ARCA para poder emitir facturas electrónicas.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'client_id' => 'required_without:client_data|exists:clients,id',
             'client_data' => 'required_without:client_id|array',
