@@ -73,12 +73,32 @@ class AfipCertificateService
             }
         }
 
-        $certCuit = $certData['subject']['CN'] ?? null;
+        // Extract CUIT from certificate
+        $subject = $certData['subject'];
+        $certCuit = null;
+        
+        if (isset($subject['serialNumber'])) {
+            $extracted = preg_replace('/[^0-9]/', '', $subject['serialNumber']);
+            if (strlen($extracted) === 11) {
+                $certCuit = $extracted;
+            }
+        }
+        
+        if (!$certCuit && isset($subject['CN'])) {
+            $extracted = preg_replace('/[^0-9]/', '', $subject['CN']);
+            if (strlen($extracted) === 11) {
+                $certCuit = $extracted;
+            }
+        }
+        
+        if (!$certCuit) {
+            throw new \Exception('No se pudo extraer un CUIT válido del certificado');
+        }
+        
         $companyCuit = preg_replace('/[^0-9]/', '', $company->national_id);
-        $certCuitClean = preg_replace('/[^0-9]/', '', $certCuit ?? '');
 
-        if ($certCuitClean !== $companyCuit) {
-            throw new \Exception("El CUIT del certificado ({$certCuit}) no coincide con el CUIT de la empresa ({$company->national_id})");
+        if ($certCuit !== $companyCuit) {
+            throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
@@ -95,6 +115,11 @@ class AfipCertificateService
                 'is_active' => true,
             ]
         );
+        
+        // Update company verification status
+        $company->update([
+            'verification_status' => 'verified',
+        ]);
 
         return $certificate;
     }
@@ -122,12 +147,32 @@ class AfipCertificateService
             }
         }
 
-        $certCuit = $certData['subject']['CN'] ?? null;
+        // Extract CUIT from certificate
+        $subject = $certData['subject'];
+        $certCuit = null;
+        
+        if (isset($subject['serialNumber'])) {
+            $extracted = preg_replace('/[^0-9]/', '', $subject['serialNumber']);
+            if (strlen($extracted) === 11) {
+                $certCuit = $extracted;
+            }
+        }
+        
+        if (!$certCuit && isset($subject['CN'])) {
+            $extracted = preg_replace('/[^0-9]/', '', $subject['CN']);
+            if (strlen($extracted) === 11) {
+                $certCuit = $extracted;
+            }
+        }
+        
+        if (!$certCuit) {
+            throw new \Exception('No se pudo extraer un CUIT válido del certificado');
+        }
+        
         $companyCuit = preg_replace('/[^0-9]/', '', $company->national_id);
-        $certCuitClean = preg_replace('/[^0-9]/', '', $certCuit ?? '');
 
-        if ($certCuitClean !== $companyCuit) {
-            throw new \Exception("El CUIT del certificado ({$certCuit}) no coincide con el CUIT de la empresa ({$company->national_id})");
+        if ($certCuit !== $companyCuit) {
+            throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
@@ -143,11 +188,16 @@ class AfipCertificateService
                 'private_key_path' => $keyPath,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
-                'valid_until' => date('Y-m-d', $certData['validTo_time_t']),
+                'valid_until' => date('Y-m-d', $certData['validTo_t']),
                 'environment' => $environment,
                 'is_active' => true,
             ]
         );
+        
+        // Update company verification status
+        $company->update([
+            'verification_status' => 'verified',
+        ]);
 
         return $certificate;
     }

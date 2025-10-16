@@ -30,26 +30,19 @@ class AfipService
             // Remove hyphens from CUIT
             $cuit = str_replace('-', '', $cuit);
             
-            // TODO: Implement real AFIP Padrón A13 integration
-            // For now, return mock data for development
-            
             // Validate CUIT format
             if (!$this->isValidCuitFormat($cuit)) {
                 throw new Exception('Formato de CUIT/CUIL inválido');
             }
             
-            // Mock response - Replace with real AFIP API call
+            // TODO: Implement real AFIP Padrón A13 integration
+            // El servicio Padrón A13 requiere certificado de PRODUCCIÓN
+            // En testing, AFIP no provee acceso al padrón real
+            
             return [
-                'success' => true,
-                'data' => [
-                    'cuit' => $cuit,
-                    'razonSocial' => 'EMPRESA EJEMPLO SRL',
-                    'domicilioFiscal' => 'AV CORRIENTES 1234, CABA',
-                    'condicionIVA' => 'Responsable Inscripto',
-                    'estado' => 'ACTIVO',
-                    'tipoPersona' => 'JURIDICA',
-                    'fechaInscripcion' => '2020-01-15'
-                ]
+                'success' => false,
+                'message' => 'El servicio de consulta de CUIT requiere certificado de producción. En ambiente de testing, ingresá los datos manualmente.',
+                'cuit_valid' => true, // El formato es válido
             ];
             
         } catch (Exception $e) {
@@ -94,17 +87,36 @@ class AfipService
             
             // AFIP certificates have CUIT in serialNumber field
             if (isset($subject['serialNumber'])) {
-                $certCuit = preg_replace('/[^0-9]/', '', $subject['serialNumber']);
+                $extracted = preg_replace('/[^0-9]/', '', $subject['serialNumber']);
+                if (strlen($extracted) === 11) {
+                    $certCuit = $extracted;
+                }
+            }
+            
+            // If not found in serialNumber, try to extract from CN
+            if (!$certCuit && isset($subject['CN'])) {
+                $extracted = preg_replace('/[^0-9]/', '', $subject['CN']);
+                if (strlen($extracted) === 11) {
+                    $certCuit = $extracted;
+                }
             }
             
             if (!$certCuit) {
-                throw new Exception('No se pudo extraer el CUIT del certificado');
+                throw new Exception('No se pudo extraer un CUIT válido (11 dígitos) del certificado. Subject: ' . json_encode($subject));
             }
             
             // Validate CUIT matches
             $expectedCuitClean = str_replace('-', '', $expectedCuit);
+            
+            Log::info('CUIT Validation', [
+                'cert_cuit' => $certCuit,
+                'expected_cuit' => $expectedCuit,
+                'expected_cuit_clean' => $expectedCuitClean,
+                'match' => $certCuit === $expectedCuitClean
+            ]);
+            
             if ($certCuit !== $expectedCuitClean) {
-                throw new Exception('El CUIT del certificado no coincide con el perfil');
+                throw new Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($expectedCuitClean)");
             }
             
             // Validate private key matches certificate

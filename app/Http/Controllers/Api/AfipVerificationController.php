@@ -91,7 +91,7 @@ class AfipVerificationController extends Controller
         $result = $this->afipService->validateCertificate(
             $certificateFile,
             $keyFile,
-            $company->cuit
+            $company->national_id
         );
         
         if (!$result['success']) {

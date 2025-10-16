@@ -19,7 +19,7 @@ class CreateCompanyRequest extends FormRequest
             'business_name' => 'nullable|string|max:200',
             'national_id' => ['required', 'string', 'max:15', 'unique:companies,national_id', new ValidNationalId()],
             'phone' => 'nullable|string|max:20',
-            'tax_condition' => 'required|in:RI,Monotributo,Exento,CF',
+            'tax_condition' => 'nullable|in:RI,Monotributo,Exento,CF',
             'default_sales_point' => 'nullable|integer|min:1|max:9999',
             'deletion_code' => [
                 'required',
@@ -43,7 +43,7 @@ class CreateCompanyRequest extends FormRequest
             'name.max' => 'El nombre no puede exceder 200 caracteres',
             'national_id.required' => 'El CUIT/CUIL/DNI es obligatorio',
             'national_id.unique' => 'Este CUIT/CUIL/DNI ya está registrado',
-            'tax_condition.required' => 'La condición fiscal es obligatoria',
+
             'tax_condition.in' => 'La condición fiscal no es válida',
             'deletion_code.required' => 'El código de eliminación es obligatorio',
             'deletion_code.min' => 'El código de eliminación debe tener al menos 8 caracteres',

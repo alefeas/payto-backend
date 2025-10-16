@@ -28,7 +28,7 @@ class CompanyService implements CompanyServiceInterface
             'business_name' => $data['business_name'] ?? null,
             'national_id' => $data['national_id'],
             'phone' => $data['phone'] ?? null,
-            'tax_condition' => null,
+            'tax_condition' => $data['tax_condition'] ?? 'registered_taxpayer',
             'default_sales_point' => $data['default_sales_point'] ?? 1,
             'last_invoice_number' => $data['last_invoice_number'] ?? 0,
             'deletion_code' => bcrypt($data['deletion_code']),
