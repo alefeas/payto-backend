@@ -11,11 +11,30 @@ use Carbon\Carbon;
 
 class AnalyticsController extends Controller
 {
-    public function getSummary($companyId)
+    public function getSummary(Request $request, $companyId)
     {
+        $period = $request->query('period', 'month');
         $now = Carbon::now();
-        $startOfMonth = $now->copy()->startOfMonth();
-        $endOfMonth = $now->copy()->endOfMonth();
+        
+        if ($period === 'custom') {
+            $startOfMonth = Carbon::parse($request->query('start_date'));
+            $endOfMonth = Carbon::parse($request->query('end_date'));
+        } else {
+            switch ($period) {
+                case 'quarter':
+                    $startOfMonth = $now->copy()->startOfQuarter();
+                    $endOfMonth = $now->copy()->endOfQuarter();
+                    break;
+                case 'year':
+                    $startOfMonth = $now->copy()->startOfYear();
+                    $endOfMonth = $now->copy()->endOfYear();
+                    break;
+                default: // month
+                    $startOfMonth = $now->copy()->startOfMonth();
+                    $endOfMonth = $now->copy()->endOfMonth();
+                    break;
+            }
+        }
 
         // Issued invoices (sales)
         $issuedInvoices = Invoice::where('issuer_company_id', $companyId)
@@ -49,39 +68,102 @@ class AnalyticsController extends Controller
         ]);
     }
 
-    public function getRevenueTrend($companyId)
+    public function getRevenueTrend(Request $request, $companyId)
     {
+        $period = $request->query('period', 'month');
+        $now = Carbon::now();
         $months = [];
-        for ($i = 5; $i >= 0; $i--) {
-            $date = Carbon::now()->subMonths($i);
-            $startOfMonth = $date->copy()->startOfMonth();
-            $endOfMonth = $date->copy()->endOfMonth();
+        
+        if ($period === 'custom') {
+            $startDate = Carbon::parse($request->query('start_date'));
+            $endDate = Carbon::parse($request->query('end_date'));
+            $diffInMonths = $startDate->diffInMonths($endDate) + 1;
+            
+            for ($i = 0; $i < min($diffInMonths, 12); $i++) {
+                $date = $startDate->copy()->addMonths($i);
+                $startOfMonth = $date->copy()->startOfMonth();
+                $endOfMonth = $date->copy()->endOfMonth();
+                if ($endOfMonth->gt($endDate)) $endOfMonth = $endDate;
 
-            $sales = Invoice::where('issuer_company_id', $companyId)
-                ->whereIn('status', ['issued', 'approved', 'paid'])
-                ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                ->sum('total');
+                $sales = Invoice::where('issuer_company_id', $companyId)
+                    ->whereIn('status', ['issued', 'approved', 'paid'])
+                    ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
+                    ->sum('total');
 
-            $purchases = Invoice::where('receiver_company_id', $companyId)
-                ->whereIn('status', ['issued', 'approved', 'paid'])
-                ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                ->sum('total');
+                $purchases = Invoice::where('receiver_company_id', $companyId)
+                    ->whereIn('status', ['issued', 'approved', 'paid'])
+                    ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
+                    ->sum('total');
 
-            $months[] = [
-                'month' => $date->format('M Y'),
-                'sales' => $sales,
-                'purchases' => $purchases,
-                'balance' => $sales - $purchases
-            ];
+                $months[] = [
+                    'month' => $date->format('M Y'),
+                    'sales' => $sales,
+                    'purchases' => $purchases,
+                    'balance' => $sales - $purchases
+                ];
+            }
+        } else {
+            $monthsToShow = match($period) {
+                'year' => 12,
+                'quarter' => 3,
+                default => 6
+            };
+            
+            for ($i = $monthsToShow - 1; $i >= 0; $i--) {
+                $date = $now->copy()->subMonths($i);
+                $startOfMonth = $date->copy()->startOfMonth();
+                $endOfMonth = $date->copy()->endOfMonth();
+
+                $sales = Invoice::where('issuer_company_id', $companyId)
+                    ->whereIn('status', ['issued', 'approved', 'paid'])
+                    ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
+                    ->sum('total');
+
+                $purchases = Invoice::where('receiver_company_id', $companyId)
+                    ->whereIn('status', ['issued', 'approved', 'paid'])
+                    ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
+                    ->sum('total');
+
+                $months[] = [
+                    'month' => $date->format('M Y'),
+                    'sales' => $sales,
+                    'purchases' => $purchases,
+                    'balance' => $sales - $purchases
+                ];
+            }
         }
 
         return response()->json($months);
     }
 
-    public function getTopClients($companyId)
+    public function getTopClients(Request $request, $companyId)
     {
+        $period = $request->query('period', 'month');
+        $now = Carbon::now();
+        
+        if ($period === 'custom') {
+            $startDate = Carbon::parse($request->query('start_date'));
+            $endDate = Carbon::parse($request->query('end_date'));
+        } else {
+            switch ($period) {
+                case 'quarter':
+                    $startDate = $now->copy()->startOfQuarter();
+                    $endDate = $now->copy()->endOfQuarter();
+                    break;
+                case 'year':
+                    $startDate = $now->copy()->startOfYear();
+                    $endDate = $now->copy()->endOfYear();
+                    break;
+                default: // month
+                    $startDate = $now->copy()->startOfMonth();
+                    $endDate = $now->copy()->endOfMonth();
+                    break;
+            }
+        }
+        
         $topClients = Invoice::where('issuer_company_id', $companyId)
             ->whereIn('status', ['issued', 'approved', 'paid'])
+            ->whereBetween('issue_date', [$startDate, $endDate])
             ->whereNotNull('client_id')
             ->select('client_id', DB::raw('SUM(total) as total_amount'), DB::raw('COUNT(*) as invoice_count'))
             ->groupBy('client_id')

@@ -21,9 +21,7 @@ class Payment extends Model
         'notes',
         'status',
         'registered_by',
-        'registered_at',
         'confirmed_by',
-        'confirmed_at',
     ];
 
     protected $casts = [
