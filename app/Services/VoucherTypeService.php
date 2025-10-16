@@ -16,18 +16,18 @@ class VoucherTypeService
             'E' => ['code' => '019', 'name' => 'Factura E (Exportación)', 'category' => 'invoice', 'requires_association' => false],
             
             // NOTAS DE CRÉDITO
-            'NCA' => ['code' => '201', 'name' => 'Nota de Crédito A', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['A']],
-            'NCB' => ['code' => '007', 'name' => 'Nota de Crédito B', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['B']],
-            'NCC' => ['code' => '012', 'name' => 'Nota de Crédito C', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['C']],
-            'NCM' => ['code' => '052', 'name' => 'Nota de Crédito M', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['M']],
-            'NCE' => ['code' => '020', 'name' => 'Nota de Crédito E', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['E']],
+            'NCA' => ['code' => '003', 'name' => 'Nota de Crédito A', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['A']],
+            'NCB' => ['code' => '008', 'name' => 'Nota de Crédito B', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['B']],
+            'NCC' => ['code' => '013', 'name' => 'Nota de Crédito C', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['C']],
+            'NCM' => ['code' => '053', 'name' => 'Nota de Crédito M', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['M']],
+            'NCE' => ['code' => '021', 'name' => 'Nota de Crédito E', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['E']],
             
             // NOTAS DE DÉBITO
-            'NDA' => ['code' => '202', 'name' => 'Nota de Débito A', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['A']],
-            'NDB' => ['code' => '008', 'name' => 'Nota de Débito B', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['B']],
-            'NDC' => ['code' => '013', 'name' => 'Nota de Débito C', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['C']],
-            'NDM' => ['code' => '053', 'name' => 'Nota de Débito M', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['M']],
-            'NDE' => ['code' => '021', 'name' => 'Nota de Débito E', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['E']],
+            'NDA' => ['code' => '002', 'name' => 'Nota de Débito A', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['A']],
+            'NDB' => ['code' => '007', 'name' => 'Nota de Débito B', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['B']],
+            'NDC' => ['code' => '012', 'name' => 'Nota de Débito C', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['C']],
+            'NDM' => ['code' => '052', 'name' => 'Nota de Débito M', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['M']],
+            'NDE' => ['code' => '020', 'name' => 'Nota de Débito E', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['E']],
             
             // RECIBOS
             'RA' => ['code' => '004', 'name' => 'Recibo A', 'category' => 'receipt', 'requires_association' => false],
@@ -40,13 +40,13 @@ class VoucherTypeService
             'FCEB' => ['code' => '206', 'name' => 'Factura de Crédito Electrónica MiPyME B', 'category' => 'fce_mipyme', 'requires_association' => false, 'requires_mipyme' => true],
             'FCEC' => ['code' => '211', 'name' => 'Factura de Crédito Electrónica MiPyME C', 'category' => 'fce_mipyme', 'requires_association' => false, 'requires_mipyme' => true],
             
-            'NCFCEA' => ['code' => '203', 'name' => 'Nota de Crédito FCE MiPyME A', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEA']],
-            'NCFCEB' => ['code' => '208', 'name' => 'Nota de Crédito FCE MiPyME B', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEB']],
-            'NCFCEC' => ['code' => '213', 'name' => 'Nota de Crédito FCE MiPyME C', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEC']],
+            'NCFCEA' => ['code' => '203', 'name' => 'Nota de Crédito FCE MiPyME A', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEA'], 'requires_mipyme' => true],
+            'NCFCEB' => ['code' => '208', 'name' => 'Nota de Crédito FCE MiPyME B', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEB'], 'requires_mipyme' => true],
+            'NCFCEC' => ['code' => '213', 'name' => 'Nota de Crédito FCE MiPyME C', 'category' => 'credit_note', 'requires_association' => true, 'compatible_with' => ['FCEC'], 'requires_mipyme' => true],
             
-            'NDFCEA' => ['code' => '207', 'name' => 'Nota de Débito FCE MiPyME A', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEA']],
-            'NDFCEB' => ['code' => '212', 'name' => 'Nota de Débito FCE MiPyME B', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEB']],
-            'NDFCEC' => ['code' => '217', 'name' => 'Nota de Débito FCE MiPyME C', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEC']],
+            'NDFCEA' => ['code' => '207', 'name' => 'Nota de Débito FCE MiPyME A', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEA'], 'requires_mipyme' => true],
+            'NDFCEB' => ['code' => '212', 'name' => 'Nota de Débito FCE MiPyME B', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEB'], 'requires_mipyme' => true],
+            'NDFCEC' => ['code' => '217', 'name' => 'Nota de Débito FCE MiPyME C', 'category' => 'debit_note', 'requires_association' => true, 'compatible_with' => ['FCEC'], 'requires_mipyme' => true],
             
             // REMITO ELECTRÓNICO
             'R' => ['code' => '995', 'name' => 'Remito Electrónico', 'category' => 'remito', 'requires_association' => false, 'has_amounts' => false],

@@ -173,6 +173,9 @@ class AfipInvoiceService
                 throw new \Exception('AFIP rechazó FCE: ' . $result->Errors->Err->Msg);
             }
 
+            // Despachar Job para consultar aceptación
+            \App\Jobs\CheckFCEAcceptanceJob::dispatch($invoice->id)->delay(now()->addHours(1));
+
             return [
                 'cae' => $result->Cae,
                 'cae_expiration' => Carbon::createFromFormat('Ymd', $result->Fch_venc_Cae)->format('Y-m-d'),

@@ -22,6 +22,8 @@ class Company extends Model
         'unique_id',
         'default_role',
         'tax_condition',
+        'is_mipyme',
+        'cbu',
         'default_sales_point',
         'last_invoice_number',
         'verification_status',
@@ -33,6 +35,7 @@ class Company extends Model
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_mipyme' => 'boolean',
         'last_invoice_number' => 'integer',
         'default_sales_point' => 'integer',
         'required_approvals' => 'integer',
