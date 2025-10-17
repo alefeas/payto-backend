@@ -79,14 +79,7 @@ class InvoiceController extends Controller
         
         $this->authorize('create', [Invoice::class, $company]);
 
-        // TODO: Descomentar en producción
-        // Validar que tenga certificado AFIP activo
-        // if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
-        //     return response()->json([
-        //         'message' => 'No se puede emitir facturas sin certificado AFIP',
-        //         'error' => 'Debes subir y activar tu certificado AFIP desde Configuración → AFIP/ARCA para poder emitir facturas electrónicas.',
-        //     ], 403);
-        // }
+        $hasAfipCertificate = $company->afipCertificate && $company->afipCertificate->is_active;
 
         $validated = $request->validate([
             'client_id' => 'required_without_all:client_data,receiver_company_id|exists:clients,id',
@@ -225,7 +218,7 @@ class InvoiceController extends Controller
             }
 
             // Auto-authorize with AFIP if certificate is configured
-            if ($company->afipCertificate && $company->afipCertificate->is_active) {
+            if ($hasAfipCertificate) {
                 try {
                     $invoice->load('perceptions');
                     $afipService = new AfipInvoiceService($company);
@@ -234,7 +227,7 @@ class InvoiceController extends Controller
                     $invoice->update([
                         'afip_cae' => $afipResult['cae'],
                         'afip_cae_due_date' => $afipResult['cae_expiration'],
-                        'afip_status' => 'approved',
+                        'afip_status' => 'authorized',
                         'status' => 'issued',
                         'afip_sent_at' => now(),
                     ]);
@@ -263,12 +256,10 @@ class InvoiceController extends Controller
                     ], 422);
                 }
             } else {
-                // Simulated CAE for testing without AFIP
+                // Draft mode - no AFIP authorization
                 $invoice->update([
-                    'afip_cae' => 'SIM-' . str_pad($voucherNumber, 10, '0', STR_PAD_LEFT),
-                    'afip_cae_due_date' => now()->addDays(10),
-                    'afip_status' => 'approved',
-                    'status' => 'issued',
+                    'afip_status' => 'draft',
+                    'status' => 'draft',
                 ]);
             }
 
@@ -279,9 +270,14 @@ class InvoiceController extends Controller
 
             DB::commit();
 
+            $message = $hasAfipCertificate 
+                ? 'Factura autorizada por AFIP exitosamente'
+                : 'Factura creada como borrador. Configura tu certificado AFIP para autorizarla.';
+            
             return response()->json([
-                'message' => 'Invoice created successfully',
+                'message' => $message,
                 'invoice' => $invoice->load(['client', 'items', 'perceptions']),
+                'has_afip_certificate' => $hasAfipCertificate,
             ], 201);
 
         } catch (\Exception $e) {

@@ -189,15 +189,11 @@ XML;
         unlink($traFile);
         unlink($cmsFile);
 
-        // Extraer contenido BASE64 entre BEGIN y END
-        if (preg_match('/-----BEGIN PKCS7-----(.+)-----END PKCS7-----/s', $cms, $matches)) {
-            $cms = preg_replace('/\s+/', '', $matches[1]);
-        } else {
-            // Fallback: remover headers y limpiar
-            $cms = preg_replace('/^.+\n\n/', '', $cms);
-            $cms = preg_replace('/\n-----END.+$/', '', $cms);
-            $cms = preg_replace('/\s+/', '', $cms);
-        }
+        // Extraer solo el contenido BASE64 del CMS
+        $cms = str_replace("\r", '', $cms);
+        $cms = preg_replace('/^MIME.+?\n\n/s', '', $cms);
+        $cms = preg_replace('/\n\n.+$/s', '', $cms);
+        $cms = str_replace("\n", '', $cms);
 
         return $cms;
     }
