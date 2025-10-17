@@ -90,13 +90,23 @@ class AfipCertificateController extends Controller
         \Storage::put($keyPath, $privKeyOut);
         
         // Crear o actualizar registro en la base de datos
+        $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
+        $preservedToken = [];
+        if ($existingCert && $existingCert->current_token && $existingCert->current_sign) {
+            $preservedToken = [
+                'current_token' => $existingCert->current_token,
+                'current_sign' => $existingCert->current_sign,
+                'token_expires_at' => $existingCert->token_expires_at,
+            ];
+        }
+        
         CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
-            [
+            array_merge([
                 'csr_path' => $csrPath,
                 'private_key_path' => $keyPath,
                 'is_active' => false,
-            ]
+            ], $preservedToken)
         );
 
         return response()->json([
@@ -177,7 +187,7 @@ class AfipCertificateController extends Controller
             
             // Guardar CSR
             $csrPath = "afip/certificates/{$company->id}/csr.pem";
-            Storage::put($csrPath, $csrContent);
+            \Storage::put($csrPath, $csrContent);
             
             $existingCert->update(['csr_path' => $csrPath]);
             

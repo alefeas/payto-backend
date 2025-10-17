@@ -33,10 +33,22 @@ class AfipWebServiceClient
      */
     public function getAuthCredentials(): array
     {
+        // Refrescar certificado desde BD
+        $this->certificate->refresh();
+        
+        Log::info('Getting AFIP auth credentials', [
+            'certificate_id' => $this->certificate->id,
+            'has_token' => !empty($this->certificate->current_token),
+            'has_sign' => !empty($this->certificate->current_sign),
+            'token_expires_at' => $this->certificate->token_expires_at,
+            'has_valid_token' => $this->certificate->hasValidToken(),
+        ]);
+        
         // Siempre intentar usar el token existente primero
         if ($this->certificate->current_token && $this->certificate->current_sign) {
             // Si tiene token_expires_at y aún es válido, usarlo
             if ($this->certificate->hasValidToken()) {
+                Log::info('Reusing existing valid token');
                 return [
                     'token' => $this->certificate->current_token,
                     'sign' => $this->certificate->current_sign,
@@ -46,11 +58,22 @@ class AfipWebServiceClient
             // Si no tiene token_expires_at pero tiene token, intentar usarlo igual
             // (AFIP dirá si es válido o no)
             if (!$this->certificate->token_expires_at) {
+                Log::info('Reusing existing token without expiration date');
                 return [
                     'token' => $this->certificate->current_token,
                     'sign' => $this->certificate->current_sign,
                 ];
             }
+            
+            Log::warning('Token exists but is expired', [
+                'token_expires_at' => $this->certificate->token_expires_at,
+                'now' => now(),
+            ]);
+        } else {
+            Log::info('No token found in certificate', [
+                'has_token' => !empty($this->certificate->current_token),
+                'has_sign' => !empty($this->certificate->current_sign),
+            ]);
         }
 
         return $this->requestNewToken();
@@ -61,6 +84,28 @@ class AfipWebServiceClient
      */
     private function requestNewToken(): array
     {
+        // Buscar token válido en CUALQUIER certificado de la misma empresa
+        $otherCert = CompanyAfipCertificate::where('company_id', $this->certificate->company_id)
+            ->whereNotNull('current_token')
+            ->whereNotNull('current_sign')
+            ->where('current_token', '!=', 'PENDING')
+            ->where('token_expires_at', '>', now())
+            ->orderByDesc('token_expires_at')
+            ->first();
+            
+        if ($otherCert) {
+            $this->certificate->update([
+                'current_token' => $otherCert->current_token,
+                'current_sign' => $otherCert->current_sign,
+                'token_expires_at' => $otherCert->token_expires_at,
+            ]);
+            
+            return [
+                'token' => $otherCert->current_token,
+                'sign' => $otherCert->current_sign,
+            ];
+        }
+        
         $tra = $this->createTRA();
         $cms = $this->signTRA($tra);
         
@@ -80,59 +125,90 @@ class AfipWebServiceClient
             
             $credentials = simplexml_load_string($response->loginCmsReturn);
             
-            // Limpiar token y sign de espacios y saltos de línea
             $token = preg_replace('/\s+/', '', (string) $credentials->credentials->token);
             $sign = preg_replace('/\s+/', '', (string) $credentials->credentials->sign);
             $expirationTime = (string) $credentials->header->expirationTime;
 
-            $this->certificate->update([
-                'current_token' => $token,
-                'current_sign' => $sign,
-                'token_expires_at' => Carbon::parse($expirationTime),
-                'last_token_generated_at' => now(),
+            // GUARDAR TOKEN EN TODOS LOS CERTIFICADOS DE LA EMPRESA
+            $expiresAt = Carbon::parse($expirationTime);
+            
+            Log::info('Attempting to save AFIP token', [
+                'company_id' => $this->certificate->company_id,
+                'token_length' => strlen($token),
+                'sign_length' => strlen($sign),
+                'expires_at' => $expiresAt->toDateTimeString(),
             ]);
+            
+            // Guardar token con commit inmediato para que no se pierda con rollback
+            $currentTransactionLevel = \DB::transactionLevel();
+            
+            // Si estamos en una transacción, hacer commit temporal
+            if ($currentTransactionLevel > 0) {
+                for ($i = 0; $i < $currentTransactionLevel; $i++) {
+                    \DB::commit();
+                }
+            }
+            
+            // Guardar token fuera de cualquier transacción
+            $updated = CompanyAfipCertificate::where('company_id', $this->certificate->company_id)
+                ->update([
+                    'current_token' => $token,
+                    'current_sign' => $sign,
+                    'token_expires_at' => $expiresAt,
+                    'last_token_generated_at' => now(),
+                ]);
+            
+            // Reiniciar transacciones si había alguna
+            if ($currentTransactionLevel > 0) {
+                for ($i = 0; $i < $currentTransactionLevel; $i++) {
+                    \DB::beginTransaction();
+                }
+            }
+            
+            Log::info('AFIP token saved successfully', [
+                'company_id' => $this->certificate->company_id,
+                'certificates_updated' => $updated,
+                'expires_at' => $expiresAt->toDateTimeString(),
+            ]);
+            
+            // Verificar INMEDIATAMENTE en BD
+            $verification = CompanyAfipCertificate::where('company_id', $this->certificate->company_id)
+                ->select('current_token', 'current_sign', 'token_expires_at')
+                ->first();
+            
+            Log::info('Token verification from DB', [
+                'has_token' => !empty($verification->current_token),
+                'token_length' => $verification->current_token ? strlen($verification->current_token) : 0,
+                'has_sign' => !empty($verification->current_sign),
+                'expires_at' => $verification->token_expires_at,
+            ]);
+            
+            if (!$verification->current_token) {
+                Log::error('CRITICAL: Token was NOT saved to database!', [
+                    'company_id' => $this->certificate->company_id,
+                    'certificate_id' => $this->certificate->id,
+                    'updated_count' => $updated,
+                ]);
+            }
+            
+            $this->certificate->refresh();
 
             return ['token' => $token, 'sign' => $sign];
             
         } catch (\Exception $e) {
             $errorMsg = $e->getMessage();
             
-            // Si ya tiene un TA válido en AFIP, extender la expiración del token actual
-            if (str_contains($errorMsg, 'ya posee un TA valido') || str_contains($errorMsg, 'TA valido')) {
-                // Refrescar el certificado desde la BD por si se actualizó en otra petición
-                $this->certificate->refresh();
-                
-                if ($this->certificate->current_token && $this->certificate->current_sign) {
-                    // Extender la expiración por 12 horas
-                    $this->certificate->update([
-                        'token_expires_at' => now()->addHours(12),
-                    ]);
-                    
-                    Log::info('Reusing existing AFIP token', [
-                        'company_id' => $this->certificate->company_id,
-                        'expires_at' => $this->certificate->token_expires_at,
-                    ]);
-                    
-                    return [
-                        'token' => $this->certificate->current_token,
-                        'sign' => $this->certificate->current_sign,
-                    ];
-                }
-                
-                Log::warning('AFIP has valid token but not stored locally', [
-                    'company_id' => $this->certificate->company_id,
-                ]);
+            if (str_contains($errorMsg, 'ya posee un TA valido') || 
+                str_contains($errorMsg, 'TA valido') ||
+                str_contains($errorMsg, 'CEE ya posee')) {
                 
                 throw new \Exception(
-                    'AFIP indica que ya existe un token válido. Ejecuta: php artisan afip:clear-tokens --company-id=' . $this->certificate->company_id
+                    'Token AFIP huérfano: AFIP tiene un token activo para este CUIT. '
+                    . 'Esperá 12 horas o usá otro CUIT de prueba. En producción esto NO pasaría.'
                 );
             }
             
-            Log::error('AFIP WSAA authentication failed', [
-                'company_id' => $this->certificate->company_id,
-                'error' => $errorMsg,
-            ]);
-            throw new \Exception('Failed to authenticate with AFIP: ' . $errorMsg);
+            throw new \Exception('Error generando token AFIP: ' . $errorMsg);
         }
     }
 
@@ -142,8 +218,8 @@ class AfipWebServiceClient
     private function createTRA(): string
     {
         $uniqueId = time();
-        $generationTime = date('c', $uniqueId - 60);
-        $expirationTime = date('c', $uniqueId + 60);
+        $generationTime = date('c', $uniqueId - 600);
+        $expirationTime = date('c', $uniqueId + 600);
 
         $tra = <<<XML
 <?xml version="1.0" encoding="UTF-8"?>
@@ -179,8 +255,15 @@ XML;
             throw new \Exception('Invalid certificate file');
         }
 
-        // Verificar que la clave privada sea válida
+        // Leer y desencriptar clave privada si está encriptada
         $keyContent = file_get_contents($keyPath);
+        if ($this->certificate->key_is_encrypted) {
+            try {
+                $keyContent = Crypt::decryptString($keyContent);
+            } catch (\Exception $e) {
+                throw new \Exception('Failed to decrypt private key: ' . $e->getMessage());
+            }
+        }
         $password = $this->certificate->encrypted_password 
             ? Crypt::decryptString($this->certificate->encrypted_password) 
             : null;

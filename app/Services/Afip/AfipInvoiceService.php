@@ -41,11 +41,10 @@ class AfipInvoiceService
             return (int) $response->FECompUltimoAutorizadoResult->CbteNro;
             
         } catch (\Exception $e) {
-            Log::error('Failed to get last authorized invoice from AFIP', [
-                'company_id' => $this->company->id,
+            Log::warning('Could not get last AFIP number, using local DB', [
                 'error' => $e->getMessage(),
             ]);
-            throw $e;
+            return 0;
         }
     }
 
@@ -84,14 +83,31 @@ class AfipInvoiceService
         try {
             $soapClient = $this->client->getWSFEClient();
             $auth = $this->client->getAuthArray();
+            
+            // Obtener último número autorizado y corregir si es necesario
+            $invoiceType = $this->getAfipInvoiceType($invoice->type);
+            $lastAuthorized = $this->getLastAuthorizedInvoice($invoice->sales_point, $invoiceType);
+            
+            if ($invoice->voucher_number != $lastAuthorized + 1) {
+                Log::warning('Voucher number mismatch, correcting', [
+                    'invoice_id' => $invoice->id,
+                    'current' => $invoice->voucher_number,
+                    'expected' => $lastAuthorized + 1,
+                ]);
+                
+                $invoice->update(['voucher_number' => $lastAuthorized + 1]);
+            }
 
             $invoiceData = $this->buildInvoiceData($invoice);
             
             Log::info('Sending invoice to AFIP', [
                 'invoice_id' => $invoice->id,
                 'voucher_number' => $invoice->voucher_number,
+                'client_id' => $invoice->client_id,
+                'client_exists' => $invoice->client ? 'YES' : 'NO',
                 'client_tax_condition' => $invoice->client->tax_condition ?? 'NOT SET',
-                'condicion_iva' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondicionIva'] ?? 'NOT SET',
+                'condicion_iva_receptor' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondIVAReceptor'] ?? 'NOT SET',
+                'full_request' => json_encode($invoiceData),
             ]);
 
             $response = $soapClient->FECAESolicitar([
@@ -136,6 +152,7 @@ class AfipInvoiceService
                 'cae' => $detail->CAE,
                 'cae_expiration' => Carbon::createFromFormat('Ymd', $detail->CAEFchVto)->format('Y-m-d'),
                 'afip_result' => $detail->Resultado,
+                'certificate_id' => $this->company->afipCertificate->id,
             ];
         } catch (\Exception $e) {
             throw $e;
@@ -249,6 +266,8 @@ class AfipInvoiceService
         $taxAmount = $invoice->total_taxes;
         $exemptAmount = 0;
 
+        $condicionIva = $this->getAfipCondicionIva($invoice->client);
+        
         $detRequest = [
             'Concepto' => $concept,
             'DocTipo' => $docType,
@@ -264,7 +283,7 @@ class AfipInvoiceService
             'ImpTrib' => $invoice->total_perceptions,
             'MonId' => 'PES',
             'MonCotiz' => 1,
-            'CondicionIva' => $this->getAfipCondicionIva($invoice->client),
+            'CondIVAReceptor' => $condicionIva, // RG 5616: Obligatorio
             'Iva' => $this->buildIvaArray($invoice),
             'Tributos' => $this->buildTributosArray($invoice),
         ];
@@ -358,8 +377,19 @@ class AfipInvoiceService
      */
     private function getAfipCondicionIva($client): int
     {
+        if (!$client) {
+            Log::error('Client is null in getAfipCondicionIva');
+            return 5; // Default: Consumidor Final
+        }
+        
         // Intentar obtener tax_condition de diferentes formas
         $taxCondition = $client->tax_condition ?? $client->taxCondition ?? null;
+        
+        Log::info('Getting AFIP Condicion IVA', [
+            'client_id' => $client->id ?? 'unknown',
+            'tax_condition_raw' => $taxCondition,
+            'document_type' => $client->document_type ?? 'NOT SET',
+        ]);
         
         // Si no tiene tax_condition, inferir del tipo de documento
         if (!$taxCondition) {
@@ -380,7 +410,14 @@ class AfipInvoiceService
             'final_consumer' => 5, // Consumidor Final
         ];
         
-        return $conditions[$taxCondition] ?? 5;
+        $code = $conditions[$taxCondition] ?? 5;
+        
+        Log::info('AFIP Condicion IVA result', [
+            'tax_condition' => $taxCondition,
+            'afip_code' => $code,
+        ]);
+        
+        return $code;
     }
 
     /**
@@ -394,7 +431,7 @@ class AfipInvoiceService
     /**
      * Build IVA array for AFIP request
      */
-    private function buildIvaArray(Invoice $invoice): array
+    private function buildIvaArray(Invoice $invoice): ?array
     {
         if ($invoice->total_taxes <= 0) {
             return null;

@@ -75,7 +75,7 @@ class InvoiceController extends Controller
 
     public function store(Request $request, $companyId)
     {
-        $company = Company::with('afipCertificate')->findOrFail($companyId);
+        $company = Company::findOrFail($companyId);
         
         $this->authorize('create', [Invoice::class, $company]);
 
@@ -111,7 +111,7 @@ class InvoiceController extends Controller
             'items.*.description' => 'required|string',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
-            'items.*.tax_rate' => 'required|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
             'perceptions' => 'nullable|array',
             'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,social_security_perception',
             'perceptions.*.name' => 'required|string',
@@ -162,8 +162,9 @@ class InvoiceController extends Controller
             $totalTaxes = 0;
 
             foreach ($validated['items'] as $item) {
+                $taxRate = $item['tax_rate'] ?? 0;
                 $itemSubtotal = $item['quantity'] * $item['unit_price'];
-                $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+                $itemTax = $itemSubtotal * ($taxRate / 100);
                 
                 $subtotal += $itemSubtotal;
                 $totalTaxes += $itemTax;
@@ -208,14 +209,15 @@ class InvoiceController extends Controller
             ]);
 
             foreach ($validated['items'] as $index => $item) {
+                $taxRate = $item['tax_rate'] ?? 0;
                 $itemSubtotal = $item['quantity'] * $item['unit_price'];
-                $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+                $itemTax = $itemSubtotal * ($taxRate / 100);
 
                 $invoice->items()->create([
                     'description' => $item['description'],
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
-                    'tax_rate' => $item['tax_rate'],
+                    'tax_rate' => $taxRate,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
                     'order_index' => $index,
@@ -453,7 +455,7 @@ class InvoiceController extends Controller
             'items.*.description' => 'required|string|max:200',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
-            'items.*.tax_rate' => 'required|numeric',
+            'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
         try {

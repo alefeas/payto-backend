@@ -92,6 +92,16 @@ class Company extends Model
         return $this->hasMany(CompanyAfipCertificate::class);
     }
 
+    public function salesPoints()
+    {
+        return $this->hasMany(CompanySalesPoint::class);
+    }
+
+    public function activeSalesPoints()
+    {
+        return $this->hasMany(CompanySalesPoint::class)->where('is_active', true);
+    }
+
     public function issuedInvoices()
     {
         return $this->hasMany(Invoice::class, 'issuer_company_id');

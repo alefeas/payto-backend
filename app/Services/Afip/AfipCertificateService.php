@@ -74,7 +74,10 @@ class AfipCertificateService
         $keyPath = "afip/certificates/{$company->id}/private.key";
 
         Storage::put($csrPath, $csrOut);
-        Storage::put($keyPath, $privateKeyOut);
+        
+        // Encriptar clave privada antes de guardar
+        $encryptedKey = Crypt::encryptString($privateKeyOut);
+        Storage::put($keyPath, $encryptedKey);
 
         // Actualizar o crear registro
         $certificate = CompanyAfipCertificate::where('company_id', $company->id)->first();
@@ -83,12 +86,14 @@ class AfipCertificateService
             $certificate->update([
                 'csr_path' => $csrPath,
                 'private_key_path' => $keyPath,
+                'key_is_encrypted' => true,
             ]);
         } else {
             $certificate = CompanyAfipCertificate::create([
                 'company_id' => $company->id,
                 'csr_path' => $csrPath,
                 'private_key_path' => $keyPath,
+                'key_is_encrypted' => true,
                 'is_active' => false,
             ]);
         }
@@ -192,16 +197,27 @@ class AfipCertificateService
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
         Storage::put($certPath, $certificateContent);
         
+        // Preservar token si existe
+        $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
+        $preservedToken = [];
+        if ($existingCert && $existingCert->current_token && $existingCert->current_sign) {
+            $preservedToken = [
+                'current_token' => $existingCert->current_token,
+                'current_sign' => $existingCert->current_sign,
+                'token_expires_at' => $existingCert->token_expires_at,
+            ];
+        }
+        
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
-            [
+            array_merge([
                 'certificate_path' => $certPath,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
                 'valid_until' => date('Y-m-d', $certData['validTo_time_t']),
                 'environment' => $environment,
                 'is_active' => true,
-            ]
+            ], $preservedToken)
         );
         
         // Update company verification status
@@ -287,19 +303,34 @@ class AfipCertificateService
         $keyPath = "afip/certificates/{$company->id}/private.key";
 
         Storage::put($certPath, $certificateContent);
-        Storage::put($keyPath, $privateKeyContent);
+        
+        // Encriptar clave privada antes de guardar
+        $encryptedKey = Crypt::encryptString($privateKeyContent);
+        Storage::put($keyPath, $encryptedKey);
+
+        // Preservar token si existe
+        $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
+        $preservedToken = [];
+        if ($existingCert && $existingCert->current_token && $existingCert->current_sign) {
+            $preservedToken = [
+                'current_token' => $existingCert->current_token,
+                'current_sign' => $existingCert->current_sign,
+                'token_expires_at' => $existingCert->token_expires_at,
+            ];
+        }
 
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
-            [
+            array_merge([
                 'certificate_path' => $certPath,
                 'private_key_path' => $keyPath,
+                'key_is_encrypted' => true,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
                 'valid_until' => date('Y-m-d', $certData['validTo_time_t']),
                 'environment' => $environment,
                 'is_active' => true,
-            ]
+            ], $preservedToken)
         );
         
         // Update company verification status
