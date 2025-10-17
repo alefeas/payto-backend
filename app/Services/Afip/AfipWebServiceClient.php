@@ -33,11 +33,24 @@ class AfipWebServiceClient
      */
     public function getAuthCredentials(): array
     {
-        if ($this->certificate->hasValidToken()) {
-            return [
-                'token' => $this->certificate->token,
-                'sign' => $this->certificate->sign,
-            ];
+        // Siempre intentar usar el token existente primero
+        if ($this->certificate->current_token && $this->certificate->current_sign) {
+            // Si tiene token_expires_at y aún es válido, usarlo
+            if ($this->certificate->hasValidToken()) {
+                return [
+                    'token' => $this->certificate->current_token,
+                    'sign' => $this->certificate->current_sign,
+                ];
+            }
+            
+            // Si no tiene token_expires_at pero tiene token, intentar usarlo igual
+            // (AFIP dirá si es válido o no)
+            if (!$this->certificate->token_expires_at) {
+                return [
+                    'token' => $this->certificate->current_token,
+                    'sign' => $this->certificate->current_sign,
+                ];
+            }
         }
 
         return $this->requestNewToken();
@@ -73,19 +86,53 @@ class AfipWebServiceClient
             $expirationTime = (string) $credentials->header->expirationTime;
 
             $this->certificate->update([
-                'token' => $token,
-                'sign' => $sign,
+                'current_token' => $token,
+                'current_sign' => $sign,
                 'token_expires_at' => Carbon::parse($expirationTime),
+                'last_token_generated_at' => now(),
             ]);
 
             return ['token' => $token, 'sign' => $sign];
             
         } catch (\Exception $e) {
+            $errorMsg = $e->getMessage();
+            
+            // Si ya tiene un TA válido en AFIP, extender la expiración del token actual
+            if (str_contains($errorMsg, 'ya posee un TA valido') || str_contains($errorMsg, 'TA valido')) {
+                // Refrescar el certificado desde la BD por si se actualizó en otra petición
+                $this->certificate->refresh();
+                
+                if ($this->certificate->current_token && $this->certificate->current_sign) {
+                    // Extender la expiración por 12 horas
+                    $this->certificate->update([
+                        'token_expires_at' => now()->addHours(12),
+                    ]);
+                    
+                    Log::info('Reusing existing AFIP token', [
+                        'company_id' => $this->certificate->company_id,
+                        'expires_at' => $this->certificate->token_expires_at,
+                    ]);
+                    
+                    return [
+                        'token' => $this->certificate->current_token,
+                        'sign' => $this->certificate->current_sign,
+                    ];
+                }
+                
+                Log::warning('AFIP has valid token but not stored locally', [
+                    'company_id' => $this->certificate->company_id,
+                ]);
+                
+                throw new \Exception(
+                    'AFIP indica que ya existe un token válido. Ejecuta: php artisan afip:clear-tokens --company-id=' . $this->certificate->company_id
+                );
+            }
+            
             Log::error('AFIP WSAA authentication failed', [
                 'company_id' => $this->certificate->company_id,
-                'error' => $e->getMessage(),
+                'error' => $errorMsg,
             ]);
-            throw new \Exception('Failed to authenticate with AFIP: ' . $e->getMessage());
+            throw new \Exception('Failed to authenticate with AFIP: ' . $errorMsg);
         }
     }
 
@@ -239,10 +286,13 @@ XML;
     {
         $credentials = $this->getAuthCredentials();
         
+        // Limpiar CUIT (solo números)
+        $cuit = preg_replace('/[^0-9]/', '', $this->certificate->company->national_id);
+        
         return [
             'Token' => $credentials['token'],
             'Sign' => $credentials['sign'],
-            'Cuit' => $this->certificate->company->national_id,
+            'Cuit' => $cuit,
         ];
     }
 }

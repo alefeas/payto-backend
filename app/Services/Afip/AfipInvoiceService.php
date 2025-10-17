@@ -86,6 +86,13 @@ class AfipInvoiceService
             $auth = $this->client->getAuthArray();
 
             $invoiceData = $this->buildInvoiceData($invoice);
+            
+            Log::info('Sending invoice to AFIP', [
+                'invoice_id' => $invoice->id,
+                'voucher_number' => $invoice->voucher_number,
+                'client_tax_condition' => $invoice->client->tax_condition ?? 'NOT SET',
+                'condicion_iva' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondicionIva'] ?? 'NOT SET',
+            ]);
 
             $response = $soapClient->FECAESolicitar([
                 'Auth' => $auth,
@@ -257,6 +264,7 @@ class AfipInvoiceService
             'ImpTrib' => $invoice->total_perceptions,
             'MonId' => 'PES',
             'MonCotiz' => 1,
+            'CondicionIva' => $this->getAfipCondicionIva($invoice->client),
             'Iva' => $this->buildIvaArray($invoice),
             'Tributos' => $this->buildTributosArray($invoice),
         ];
@@ -343,6 +351,36 @@ class AfipInvoiceService
         ];
         
         return $types[$docType] ?? 96;
+    }
+
+    /**
+     * Get AFIP Condicion IVA code (RG 5616)
+     */
+    private function getAfipCondicionIva($client): int
+    {
+        // Intentar obtener tax_condition de diferentes formas
+        $taxCondition = $client->tax_condition ?? $client->taxCondition ?? null;
+        
+        // Si no tiene tax_condition, inferir del tipo de documento
+        if (!$taxCondition) {
+            $docType = $client->document_type ?? 'DNI';
+            $taxCondition = in_array($docType, ['CUIT', 'CUIL']) ? 'registered_taxpayer' : 'final_consumer';
+            
+            Log::warning('Client missing tax_condition, inferred from document type', [
+                'client_id' => $client->id ?? 'unknown',
+                'document_type' => $docType,
+                'inferred_condition' => $taxCondition,
+            ]);
+        }
+        
+        $conditions = [
+            'registered_taxpayer' => 1, // Responsable Inscripto
+            'monotax' => 6, // Monotributo
+            'exempt' => 4, // Exento
+            'final_consumer' => 5, // Consumidor Final
+        ];
+        
+        return $conditions[$taxCondition] ?? 5;
     }
 
     /**

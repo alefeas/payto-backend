@@ -130,6 +130,22 @@ class InvoiceController extends Controller
                 $validated['client_id'] = $client->id;
             }
 
+            // Consultar último número autorizado en AFIP
+            $afipService = new AfipInvoiceService($company);
+            $invoiceTypeCode = $this->getAfipInvoiceTypeCode($validated['invoice_type']);
+            
+            try {
+                $lastAfipNumber = $afipService->getLastAuthorizedInvoice(
+                    $validated['sales_point'],
+                    $invoiceTypeCode
+                );
+            } catch (\Exception $e) {
+                Log::warning('Could not get last AFIP number, using local DB', [
+                    'error' => $e->getMessage()
+                ]);
+                $lastAfipNumber = 0;
+            }
+
             // Get last invoice number from database
             $lastInvoice = Invoice::where('issuer_company_id', $companyId)
                 ->where('type', $validated['invoice_type'])
@@ -137,10 +153,10 @@ class InvoiceController extends Controller
                 ->orderBy('voucher_number', 'desc')
                 ->first();
 
-            // Use the higher value between DB and company's last_invoice_number
+            // Use the highest value between AFIP, DB and company's last_invoice_number
             $lastFromDb = $lastInvoice ? $lastInvoice->voucher_number : 0;
             $lastFromCompany = $company->last_invoice_number ?? 0;
-            $voucherNumber = max($lastFromDb, $lastFromCompany) + 1;
+            $voucherNumber = max($lastAfipNumber, $lastFromDb, $lastFromCompany) + 1;
 
             $subtotal = 0;
             $totalTaxes = 0;
