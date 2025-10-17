@@ -418,4 +418,33 @@ class AfipCertificateController extends Controller
             ], 500);
         }
     }
+
+    public function updateTaxCondition($companyId)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
+        $certificate = $company->afipCertificates()->where('is_active', true)->first();
+
+        if (!$certificate) {
+            return response()->json(['error' => 'No hay certificado AFIP activo'], 404);
+        }
+
+        try {
+            $verificationService = new AfipVerificationService($certificate);
+            $taxCondition = $verificationService->getTaxCondition();
+            
+            $company->update(['tax_condition' => $taxCondition]);
+
+            return response()->json([
+                'success' => true,
+                'data' => ['taxCondition' => $taxCondition]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
 }

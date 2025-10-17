@@ -79,9 +79,9 @@
 
     @if($invoice->afip_cae)
     <div class="cae-box">
-        <p><strong>CAE:</strong> {{ $invoice->afip_cae }}</p>
-        <p><strong>Vencimiento CAE:</strong> {{ $invoice->afip_cae_due_date->format('d/m/Y') }}</p>
-        <p><strong>Comprobante Autorizado por AFIP</strong></p>
+        <h4 style="margin-top: 0;">COMPROBANTE AUTORIZADO POR AFIP</h4>
+        <p style="font-size: 14px;"><strong>CAE:</strong> <span style="font-family: monospace; font-size: 16px;">{{ $invoice->afip_cae }}</span></p>
+        <p><strong>Fecha de Vencimiento CAE:</strong> {{ $invoice->afip_cae_due_date->format('d/m/Y') }}</p>
     </div>
     @endif
 </body>

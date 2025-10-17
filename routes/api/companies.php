@@ -27,6 +27,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/companies/{companyId}/afip/certificate/upload', [App\Http\Controllers\Api\AfipCertificateController::class, 'uploadCertificate']);
     Route::post('/companies/{companyId}/afip/certificate/upload-manual', [App\Http\Controllers\Api\AfipCertificateController::class, 'uploadManual']);
     Route::post('/companies/{companyId}/afip/certificate/test', [App\Http\Controllers\Api\AfipCertificateController::class, 'testConnection']);
+    Route::post('/companies/{companyId}/afip/update-tax-condition', [App\Http\Controllers\Api\AfipCertificateController::class, 'updateTaxCondition']);
     Route::delete('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'destroy']);
     
     // Sales points routes

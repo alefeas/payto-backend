@@ -132,7 +132,9 @@ class InvoiceController extends Controller
 
             // Consultar último número autorizado en AFIP
             $afipService = new AfipInvoiceService($company);
-            $invoiceTypeCode = $this->getAfipInvoiceTypeCode($validated['invoice_type']);
+            // Convertir código a tipo interno si es necesario
+            $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+            $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
             
             try {
                 $lastAfipNumber = $afipService->getLastAuthorizedInvoice(
@@ -148,7 +150,7 @@ class InvoiceController extends Controller
 
             // Get last invoice number from database
             $lastInvoice = Invoice::where('issuer_company_id', $companyId)
-                ->where('type', $validated['invoice_type'])
+                ->where('type', $invoiceType)
                 ->where('sales_point', $validated['sales_point'])
                 ->orderBy('voucher_number', 'desc')
                 ->first();
@@ -185,7 +187,7 @@ class InvoiceController extends Controller
 
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
-                'type' => $validated['invoice_type'],
+                'type' => $invoiceType,
                 'sales_point' => $validated['sales_point'],
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
@@ -718,5 +720,48 @@ class InvoiceController extends Controller
             $lines[] = $invoice->afip_cae;
         }
         return implode("\n", $lines);
+    }
+
+    /**
+     * Get next available invoice number from AFIP
+     */
+    public function getNextNumber(Request $request, $companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        
+        $this->authorize('create', [Invoice::class, $company]);
+
+        $validated = $request->validate([
+            'sales_point' => 'required|integer|min:1|max:9999',
+            'invoice_type' => 'required|string',
+        ]);
+
+        try {
+            $afipService = new AfipInvoiceService($company);
+            // Convertir código a tipo interno si es necesario
+            $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+            $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
+            
+            $lastNumber = $afipService->getLastAuthorizedInvoice(
+                $validated['sales_point'],
+                $invoiceTypeCode
+            );
+
+            $nextNumber = $lastNumber + 1;
+
+            return response()->json([
+                'last_number' => $lastNumber,
+                'next_number' => $nextNumber,
+                'formatted_number' => sprintf('%04d-%08d', $validated['sales_point'], $nextNumber),
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'No se pudo consultar el último número en AFIP',
+                'error' => $e->getMessage(),
+                'next_number' => 1,
+                'formatted_number' => sprintf('%04d-%08d', $validated['sales_point'], 1),
+            ], 200);
+        }
     }
 }

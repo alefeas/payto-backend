@@ -84,29 +84,37 @@ class AfipInvoiceService
             $soapClient = $this->client->getWSFEClient();
             $auth = $this->client->getAuthArray();
             
-            // Obtener último número autorizado y corregir si es necesario
             $invoiceType = $this->getAfipInvoiceType($invoice->type);
-            $lastAuthorized = $this->getLastAuthorizedInvoice($invoice->sales_point, $invoiceType);
             
-            if ($invoice->voucher_number != $lastAuthorized + 1) {
+            // Consultar último número autorizado justo antes de enviar
+            $lastAuthorized = $this->getLastAuthorizedInvoice($invoice->sales_point, $invoiceType);
+            $expectedNumber = $lastAuthorized + 1;
+            
+            // Si el número no coincide, actualizar
+            if ($invoice->voucher_number != $expectedNumber) {
                 Log::warning('Voucher number mismatch, correcting', [
                     'invoice_id' => $invoice->id,
                     'current' => $invoice->voucher_number,
-                    'expected' => $lastAuthorized + 1,
+                    'expected' => $expectedNumber,
+                    'last_authorized' => $lastAuthorized,
                 ]);
                 
-                $invoice->update(['voucher_number' => $lastAuthorized + 1]);
+                $invoice->update([
+                    'voucher_number' => $expectedNumber,
+                    'number' => sprintf('%04d-%08d', $invoice->sales_point, $expectedNumber)
+                ]);
             }
-
+            
             $invoiceData = $this->buildInvoiceData($invoice);
             
             Log::info('Sending invoice to AFIP', [
                 'invoice_id' => $invoice->id,
                 'voucher_number' => $invoice->voucher_number,
+                'invoice_type' => $invoiceType,
                 'client_id' => $invoice->client_id,
                 'client_exists' => $invoice->client ? 'YES' : 'NO',
                 'client_tax_condition' => $invoice->client->tax_condition ?? 'NOT SET',
-                'condicion_iva_receptor' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondIVAReceptor'] ?? 'NOT SET',
+                'condicion_iva_receptor_id' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondicionIVAReceptorId'] ?? 'NOT SET',
                 'full_request' => json_encode($invoiceData),
             ]);
 
@@ -257,36 +265,73 @@ class AfipInvoiceService
      */
     private function buildInvoiceData(Invoice $invoice): array
     {
+        $condicionIva = $this->getAfipCondicionIva($invoice->client);
         $invoiceType = $this->getAfipInvoiceType($invoice->type);
+        
+        // Validar compatibilidad tipo de comprobante con condición IVA
+        $this->validateInvoiceTypeCompatibility($invoiceType, $condicionIva, $invoice->client);
+        
         $docType = $this->getAfipDocType($invoice->client);
         $concept = $invoice->concept === 'services' ? 2 : ($invoice->concept === 'products_and_services' ? 3 : 1);
 
-        $total = $invoice->total;
-        $netAmount = $invoice->subtotal;
-        $taxAmount = $invoice->total_taxes;
-        $exemptAmount = 0;
+        // Validar fecha según concepto (AFIP error 10016)
+        $issueDate = $invoice->issue_date;
+        $today = now();
+        $maxDaysBack = $concept == 1 ? 5 : 10; // Productos: 5 días, Servicios: 10 días
+        $maxDaysForward = 5;
+        
+        if ($issueDate->lt($today->copy()->subDays($maxDaysBack)) || $issueDate->gt($today->copy()->addDays($maxDaysForward))) {
+            $minDate = $today->copy()->subDays($maxDaysBack)->format('d/m/Y');
+            $maxDate = $today->copy()->addDays($maxDaysForward)->format('d/m/Y');
+            $conceptName = $concept == 1 ? 'Productos' : 'Servicios';
+            
+            throw new \Exception(
+                "La fecha del comprobante ({$issueDate->format('d/m/Y')}) está fuera del rango permitido por AFIP. "
+                . "Para {$conceptName}, la fecha debe estar entre {$minDate} y {$maxDate}."
+            );
+        }
 
-        $condicionIva = $this->getAfipCondicionIva($invoice->client);
+        // Factura C: IVA incluido, no se discrimina
+        $isTipoC = in_array($invoiceType, [11, 13, 12, 15]); // Factura C, NC C, ND C, Recibo C
+        
+        $docNro = $this->cleanDocumentNumber($invoice->client->document_number);
+        
+        // Para consumidores finales sin CUIT, usar DocNro = 0
+        if ($condicionIva == 5 && (empty($docNro) || strlen($docNro) != 11)) {
+            $docNro = '0';
+            $docType = 99; // Sin identificar
+        }
+        
+        // Validar que DocNro no esté vacío
+        if (empty($docNro)) {
+            $docNro = '0';
+        }
         
         $detRequest = [
             'Concepto' => $concept,
             'DocTipo' => $docType,
-            'DocNro' => $this->cleanDocumentNumber($invoice->client->document_number),
+            'DocNro' => $docNro,
             'CbteDesde' => $invoice->voucher_number,
             'CbteHasta' => $invoice->voucher_number,
-            'CbteFch' => $invoice->issue_date->format('Ymd'),
-            'ImpTotal' => $total,
+            'CbteFch' => $issueDate->format('Ymd'),
+            'ImpTotal' => $isTipoC ? $invoice->subtotal + $invoice->total_perceptions : $invoice->total,
             'ImpTotConc' => 0,
-            'ImpNeto' => $netAmount,
-            'ImpOpEx' => $exemptAmount,
-            'ImpIVA' => $taxAmount,
+            'ImpNeto' => $invoice->subtotal,
+            'ImpOpEx' => 0,
+            'ImpIVA' => $isTipoC ? 0 : $invoice->total_taxes,
             'ImpTrib' => $invoice->total_perceptions,
             'MonId' => 'PES',
             'MonCotiz' => 1,
-            'CondIVAReceptor' => $condicionIva, // RG 5616: Obligatorio
-            'Iva' => $this->buildIvaArray($invoice),
-            'Tributos' => $this->buildTributosArray($invoice),
         ];
+        
+        // Agregar CondicionIVAReceptorId (RG 5616) - Campo obligatorio desde 2024
+        $detRequest['CondicionIVAReceptorId'] = $condicionIva;
+        
+        // Factura C no lleva array de IVA
+        if (!$isTipoC) {
+            $detRequest['Iva'] = $this->buildIvaArray($invoice);
+        }
+        $detRequest['Tributos'] = $this->buildTributosArray($invoice);
 
         // Agregar comprobante asociado para NC/ND
         $category = \App\Services\VoucherTypeService::getCategory($invoice->type);
@@ -326,6 +371,35 @@ class AfipInvoiceService
     private function getAfipInvoiceType(string $invoiceType): int
     {
         return (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
+    }
+    
+    /**
+     * Validate invoice type compatibility with receptor's IVA condition (RG 5616)
+     */
+    private function validateInvoiceTypeCompatibility(int $invoiceType, int $condicionIva, $client): void
+    {
+        $typeNames = [
+            1 => 'Factura A', 6 => 'Factura B', 11 => 'Factura C',
+            2 => 'Nota de Débito A', 8 => 'Nota de Débito B',
+            3 => 'Nota de Crédito A', 9 => 'Nota de Crédito B'
+        ];
+        
+        $condNames = [
+            1 => 'Responsable Inscripto',
+            4 => 'Exento',
+            5 => 'Consumidor Final',
+            6 => 'Monotributo'
+        ];
+        
+        // Facturas/NC/ND tipo A solo para Responsables Inscriptos
+        $tiposA = [1, 2, 3];
+        if (in_array($invoiceType, $tiposA) && $condicionIva != 1) {
+            throw new \Exception(
+                "No se puede emitir {$typeNames[$invoiceType]} a un cliente {$condNames[$condicionIva]}. "
+                . "Los comprobantes tipo A solo pueden emitirse a Responsables Inscriptos. "
+                . "Utilizá Factura B para este cliente."
+            );
+        }
     }
 
     /**
@@ -433,19 +507,45 @@ class AfipInvoiceService
      */
     private function buildIvaArray(Invoice $invoice): ?array
     {
-        if ($invoice->total_taxes <= 0) {
+        $ivaGroups = [];
+        
+        foreach ($invoice->items as $item) {
+            $taxRate = $item->tax_rate;
+            $itemSubtotal = $item->quantity * $item->unit_price;
+            
+            // Exento (-1) y No Gravado (-2) no van en AlicIva
+            if ($taxRate == -1 || $taxRate == -2) {
+                continue;
+            }
+            
+            $itemTax = $taxRate > 0 ? ($itemSubtotal * $taxRate / 100) : 0;
+            
+            if (!isset($ivaGroups[$taxRate])) {
+                $ivaGroups[$taxRate] = ['base' => 0, 'tax' => 0];
+            }
+            
+            $ivaGroups[$taxRate]['base'] += $itemSubtotal;
+            $ivaGroups[$taxRate]['tax'] += $itemTax;
+        }
+        
+        if (empty($ivaGroups)) {
             return null;
         }
-
-        return [
-            'AlicIva' => [
-                [
-                    'Id' => 5, // 21%
-                    'BaseImp' => $invoice->subtotal,
-                    'Importe' => $invoice->total_taxes,
-                ],
-            ],
+        
+        $afipIvaIds = [
+            0 => 3, 2.5 => 9, 5 => 4, 10.5 => 4, 21 => 5, 27 => 6,
         ];
+        
+        $alicIva = [];
+        foreach ($ivaGroups as $rate => $amounts) {
+            $alicIva[] = [
+                'Id' => $afipIvaIds[$rate] ?? 5,
+                'BaseImp' => round($amounts['base'], 2),
+                'Importe' => round($amounts['tax'], 2),
+            ];
+        }
+        
+        return ['AlicIva' => $alicIva];
     }
 
     /**
