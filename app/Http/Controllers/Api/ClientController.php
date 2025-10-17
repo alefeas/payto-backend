@@ -53,7 +53,7 @@ class ClientController extends Controller
             ->first();
 
         if ($existing) {
-            return $this->error('Client with this document number already exists', 422);
+            return $this->error('Ya existe un cliente con este número de documento', 422);
         }
 
         $client = Client::create([
@@ -97,7 +97,7 @@ class ClientController extends Controller
                 ->first();
 
             if ($existing) {
-                return $this->error('Client with this document number already exists', 422);
+                return $this->error('Ya existe un cliente con este número de documento', 422);
             }
         }
 
@@ -115,7 +115,7 @@ class ClientController extends Controller
 
         // Check if client has invoices
         if ($client->invoices()->count() > 0) {
-            return $this->error('Cannot delete client with existing invoices', 422);
+            return $this->error('No se puede eliminar un cliente con facturas existentes', 422);
         }
 
         $client->delete();

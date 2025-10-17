@@ -181,6 +181,16 @@ class VoucherController extends Controller
                         'status' => 'issued',
                         'afip_sent_at' => now(),
                     ]);
+                    
+                    // Generate PDF and TXT
+                    $pdfService = new \App\Services\InvoicePdfService();
+                    $pdfPath = $pdfService->generatePdf($voucher);
+                    $txtPath = $pdfService->generateTxt($voucher);
+                    
+                    $voucher->update([
+                        'pdf_url' => $pdfPath,
+                        'afip_txt_url' => $txtPath,
+                    ]);
                 } catch (\Exception $e) {
                     DB::rollBack();
                     

@@ -67,7 +67,7 @@ class CompanyConnectionController extends Controller
                 'status' => 'connected',
                 'requestedAt' => $connection->created_at,
                 'connectedAt' => $connection->connected_at,
-                'requestedBy' => $connection->requestedByUser->email ?? null,
+                'requestedBy' => $connection->requestedByUser?->email ?? null,
                 'totalInvoicesSent' => $invoicesSent,
                 'totalInvoicesReceived' => $invoicesReceived,
                 'totalAmountSent' => $amountSent,
@@ -98,7 +98,7 @@ class CompanyConnectionController extends Controller
                     'toCompanyName' => $connection->connectedCompany->name,
                     'message' => $connection->message,
                     'requestedAt' => $connection->created_at,
-                    'requestedBy' => $connection->requestedByUser->email,
+                    'requestedBy' => $connection->requestedByUser?->email ?? null,
                 ];
             });
 
@@ -124,7 +124,7 @@ class CompanyConnectionController extends Controller
                     'toCompanyName' => $connection->connectedCompany->name,
                     'message' => $connection->message,
                     'requestedAt' => $connection->created_at,
-                    'requestedBy' => $connection->requestedByUser->email,
+                    'requestedBy' => $connection->requestedByUser?->email ?? null,
                 ];
             });
 

@@ -238,6 +238,16 @@ class InvoiceController extends Controller
                         'status' => 'issued',
                         'afip_sent_at' => now(),
                     ]);
+                    
+                    // Generate PDF and TXT
+                    $pdfService = new \App\Services\InvoicePdfService();
+                    $pdfPath = $pdfService->generatePdf($invoice);
+                    $txtPath = $pdfService->generateTxt($invoice);
+                    
+                    $invoice->update([
+                        'pdf_url' => $pdfPath,
+                        'afip_txt_url' => $txtPath,
+                    ]);
                 } catch (\Exception $e) {
                     DB::rollBack();
                     
@@ -621,7 +631,15 @@ class InvoiceController extends Controller
     {
         $invoice = Invoice::with(['client', 'items'])->findOrFail($id);
 
-        // Si tiene PDF adjunto, descargarlo
+        // Si tiene PDF generado con CAE
+        if ($invoice->pdf_url) {
+            $filePath = storage_path('app/' . $invoice->pdf_url);
+            if (file_exists($filePath)) {
+                return response()->download($filePath, "factura-{$invoice->number}.pdf");
+            }
+        }
+        
+        // Si tiene PDF adjunto
         if ($invoice->attachment_path) {
             $filePath = storage_path('app/public/' . $invoice->attachment_path);
             if (file_exists($filePath)) {
@@ -629,23 +647,30 @@ class InvoiceController extends Controller
             }
         }
 
-        // Si no tiene adjunto, generar PDF simple
-        $pdf = $this->generateSimplePDF($invoice);
-        return response($pdf, 200, [
-            'Content-Type' => 'application/pdf',
-            'Content-Disposition' => 'attachment; filename="factura-' . $invoice->number . '.pdf"',
-        ]);
+        // Generar PDF on-demand
+        $pdfService = new \App\Services\InvoicePdfService();
+        $pdfPath = $pdfService->generatePdf($invoice);
+        $filePath = storage_path('app/' . $pdfPath);
+        return response()->download($filePath, "factura-{$invoice->number}.pdf");
     }
 
     public function downloadTXT($companyId, $id)
     {
         $invoice = Invoice::with(['client', 'items'])->findOrFail($id);
 
-        $txt = $this->generateTXT($invoice);
-        return response($txt, 200, [
-            'Content-Type' => 'text/plain',
-            'Content-Disposition' => 'attachment; filename="factura-' . $invoice->number . '.txt"',
-        ]);
+        // Si tiene TXT generado
+        if ($invoice->afip_txt_url) {
+            $filePath = storage_path('app/' . $invoice->afip_txt_url);
+            if (file_exists($filePath)) {
+                return response()->download($filePath, "factura-{$invoice->number}.txt");
+            }
+        }
+        
+        // Generar TXT on-demand
+        $pdfService = new \App\Services\InvoicePdfService();
+        $txtPath = $pdfService->generateTxt($invoice);
+        $filePath = storage_path('app/' . $txtPath);
+        return response()->download($filePath, "factura-{$invoice->number}.txt");
     }
 
     private function generateSimplePDF($invoice)

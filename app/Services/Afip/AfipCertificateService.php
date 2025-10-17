@@ -11,38 +11,87 @@ class AfipCertificateService
 {
     public function generateCSR(Company $company): array
     {
-        $privateKey = openssl_pkey_new([
+        // Configuración OpenSSL
+        $configArgs = [
             'private_key_bits' => 2048,
             'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ]);
+            'digest_alg' => 'sha256',
+        ];
+        
+        // Buscar openssl.cnf en Windows
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $possiblePaths = [
+                'C:/xampp/apache/conf/openssl.cnf',
+                'C:/xampp/php/extras/openssl/openssl.cnf',
+                getenv('OPENSSL_CONF'),
+            ];
+            
+            foreach ($possiblePaths as $path) {
+                if ($path && file_exists($path)) {
+                    $configArgs['config'] = $path;
+                    break;
+                }
+            }
+        }
 
+        // Generar clave privada
+        $privateKey = openssl_pkey_new($configArgs);
+        if (!$privateKey) {
+            throw new \Exception('Error al generar clave privada. Verifica que OpenSSL esté configurado correctamente.');
+        }
+
+        // Limpiar CUIT (sin guiones)
+        $cuit = preg_replace('/[^0-9]/', '', $company->national_id);
+        
+        // Datos del certificado
         $dn = [
             'countryName' => 'AR',
             'stateOrProvinceName' => 'Buenos Aires',
             'localityName' => 'CABA',
             'organizationName' => $company->business_name ?? $company->name,
-            'commonName' => $company->national_id,
+            'commonName' => $cuit,
+            'serialNumber' => 'CUIT ' . $cuit,
         ];
 
-        $csr = openssl_csr_new($dn, $privateKey, ['digest_alg' => 'sha256']);
+        // Generar CSR
+        $csr = openssl_csr_new($dn, $privateKey, $configArgs);
+        if (!$csr) {
+            throw new \Exception('Error al generar CSR.');
+        }
         
-        openssl_csr_export($csr, $csrOut);
-        openssl_pkey_export($privateKey, $privateKeyOut);
+        // Exportar CSR
+        if (!openssl_csr_export($csr, $csrOut)) {
+            throw new \Exception('Error al exportar CSR.');
+        }
+        
+        // Exportar clave privada
+        if (!openssl_pkey_export($privateKey, $privateKeyOut, null, $configArgs)) {
+            throw new \Exception('Error al exportar clave privada.');
+        }
 
+        // Guardar archivos
         $csrPath = "afip/certificates/{$company->id}/csr.pem";
         $keyPath = "afip/certificates/{$company->id}/private.key";
 
         Storage::put($csrPath, $csrOut);
         Storage::put($keyPath, $privateKeyOut);
 
-        $certificate = CompanyAfipCertificate::updateOrCreate(
-            ['company_id' => $company->id],
-            [
+        // Actualizar o crear registro
+        $certificate = CompanyAfipCertificate::where('company_id', $company->id)->first();
+        
+        if ($certificate) {
+            $certificate->update([
+                'csr_path' => $csrPath,
+                'private_key_path' => $keyPath,
+            ]);
+        } else {
+            $certificate = CompanyAfipCertificate::create([
+                'company_id' => $company->id,
                 'csr_path' => $csrPath,
                 'private_key_path' => $keyPath,
                 'is_active' => false,
-            ]
-        );
+            ]);
+        }
 
         return [
             'csr' => $csrOut,
@@ -101,6 +150,23 @@ class AfipCertificateService
             throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
+        // Verificar que el certificado coincida con la clave privada existente
+        $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
+        if ($existingCert && $existingCert->private_key_path && Storage::exists($existingCert->private_key_path)) {
+            $keyContent = Storage::get($existingCert->private_key_path);
+            $privKey = openssl_pkey_get_private($keyContent, $password);
+            
+            if ($privKey) {
+                $pubKey = openssl_pkey_get_public($certificateContent);
+                $pubDetails = openssl_pkey_get_details($pubKey);
+                $privDetails = openssl_pkey_get_details($privKey);
+                
+                if ($pubDetails['key'] !== $privDetails['key']) {
+                    throw new \Exception('El certificado no coincide con la clave privada existente. Genera un nuevo CSR y solicita un certificado con ese CSR.');
+                }
+            }
+        }
+        
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
         Storage::put($certPath, $certificateContent);
         
@@ -175,6 +241,20 @@ class AfipCertificateService
             throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
+        // Verificar que el certificado y la clave privada coincidan
+        $privKey = openssl_pkey_get_private($privateKeyContent, $password);
+        if (!$privKey) {
+            throw new \Exception('Clave privada inválida o contraseña incorrecta');
+        }
+        
+        $pubKey = openssl_pkey_get_public($certificateContent);
+        $pubDetails = openssl_pkey_get_details($pubKey);
+        $privDetails = openssl_pkey_get_details($privKey);
+        
+        if ($pubDetails['key'] !== $privDetails['key']) {
+            throw new \Exception('El certificado y la clave privada no coinciden');
+        }
+        
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
         $keyPath = "afip/certificates/{$company->id}/private.key";
 

@@ -87,6 +87,11 @@ class Company extends Model
         return $this->hasOne(CompanyAfipCertificate::class);
     }
 
+    public function afipCertificates()
+    {
+        return $this->hasMany(CompanyAfipCertificate::class);
+    }
+
     public function issuedInvoices()
     {
         return $this->hasMany(Invoice::class, 'issuer_company_id');

@@ -3,7 +3,6 @@
 namespace App\Jobs;
 
 use App\Models\Invoice;
-use App\Services\Afip\AfipWebServiceClient;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -15,60 +14,33 @@ class CheckFCEAcceptanceJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public function __construct(
-        private int $invoiceId
-    ) {}
+    protected int $invoiceId;
+
+    public function __construct(int $invoiceId)
+    {
+        $this->invoiceId = $invoiceId;
+    }
 
     public function handle(): void
     {
-        $invoice = Invoice::with('issuerCompany.afipCertificate')->find($this->invoiceId);
-        
-        if (!$invoice || $invoice->acceptance_status !== 'pending_acceptance') {
+        $invoice = Invoice::find($this->invoiceId);
+
+        if (!$invoice || !$invoice->cae) {
             return;
         }
 
         try {
-            $client = new AfipWebServiceClient($invoice->issuerCompany->afipCertificate, 'wsfex');
-            $soapClient = $client->getWSFEXClient();
-            $auth = $client->getAuthArray();
-
-            $response = $soapClient->FEXGetCMP([
-                'Auth' => $auth,
-                'Cmp' => [
-                    'Tipo_cbte' => (int) \App\Services\VoucherTypeService::getAfipCode($invoice->type),
-                    'Punto_vta' => $invoice->sales_point,
-                    'Cbte_nro' => $invoice->voucher_number,
-                ],
+            // TODO: Consultar estado de aceptación del comprador en AFIP
+            // Por ahora solo registramos que se debe verificar
+            Log::info('FCE acceptance check scheduled', [
+                'invoice_id' => $invoice->id,
+                'cae' => $invoice->cae,
             ]);
-
-            $result = $response->FEXGetCMPResult;
-
-            if (isset($result->FEXResultGet)) {
-                $status = $result->FEXResultGet->Estado ?? null;
-                
-                if ($status === 'ACE') {
-                    $invoice->update([
-                        'acceptance_status' => 'accepted',
-                        'acceptance_date' => now(),
-                    ]);
-                } elseif ($status === 'REC') {
-                    $invoice->update([
-                        'acceptance_status' => 'rejected',
-                        'acceptance_date' => now(),
-                    ]);
-                } else {
-                    // Aún pendiente, reprogramar
-                    self::dispatch($this->invoiceId)->delay(now()->addHours(2));
-                }
-            }
         } catch (\Exception $e) {
-            Log::error('FCE acceptance check failed', [
-                'invoice_id' => $this->invoiceId,
+            Log::error('Failed to check FCE acceptance', [
+                'invoice_id' => $invoice->id,
                 'error' => $e->getMessage(),
             ]);
-            
-            // Reintentar en 2 horas
-            self::dispatch($this->invoiceId)->delay(now()->addHours(2));
         }
     }
 }

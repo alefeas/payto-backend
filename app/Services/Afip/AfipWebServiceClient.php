@@ -67,8 +67,9 @@ class AfipWebServiceClient
             
             $credentials = simplexml_load_string($response->loginCmsReturn);
             
-            $token = (string) $credentials->credentials->token;
-            $sign = (string) $credentials->credentials->sign;
+            // Limpiar token y sign de espacios y saltos de línea
+            $token = preg_replace('/\s+/', '', (string) $credentials->credentials->token);
+            $sign = preg_replace('/\s+/', '', (string) $credentials->credentials->sign);
             $expirationTime = (string) $credentials->header->expirationTime;
 
             $this->certificate->update([
@@ -124,14 +125,49 @@ XML;
             throw new \Exception('Certificate or private key file not found');
         }
 
+        // Verificar que el certificado sea válido
+        $certContent = file_get_contents($certPath);
+        $certData = openssl_x509_parse($certContent);
+        if (!$certData) {
+            throw new \Exception('Invalid certificate file');
+        }
+
+        // Verificar que la clave privada sea válida
+        $keyContent = file_get_contents($keyPath);
+        $password = $this->certificate->encrypted_password 
+            ? Crypt::decryptString($this->certificate->encrypted_password) 
+            : null;
+        
+        $privKey = openssl_pkey_get_private($keyContent, $password);
+        if (!$privKey) {
+            throw new \Exception('Invalid private key or password');
+        }
+
+        // Verificar que coincidan
+        $pubKey = openssl_pkey_get_public($certContent);
+        $pubDetails = openssl_pkey_get_details($pubKey);
+        $privDetails = openssl_pkey_get_details($privKey);
+        
+        if ($pubDetails['key'] !== $privDetails['key']) {
+            Log::error('Certificate and private key do not match', [
+                'cert_cn' => $certData['subject']['CN'] ?? 'N/A',
+                'company_id' => $this->certificate->company_id,
+            ]);
+            throw new \Exception('Certificate and private key do not match');
+        }
+
         $traFile = tempnam(sys_get_temp_dir(), 'tra_');
         $cmsFile = tempnam(sys_get_temp_dir(), 'cms_');
         
         file_put_contents($traFile, $tra);
 
-        $password = $this->certificate->encrypted_password 
-            ? Crypt::decryptString($this->certificate->encrypted_password) 
-            : null;
+        // Configurar OpenSSL para Windows
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $opensslConf = getenv('OPENSSL_CONF') ?: 'C:/xampp/apache/conf/openssl.cnf';
+            if (file_exists($opensslConf)) {
+                putenv("OPENSSL_CONF={$opensslConf}");
+            }
+        }
 
         $status = openssl_pkcs7_sign(
             $traFile,
@@ -143,7 +179,9 @@ XML;
         );
 
         if (!$status) {
-            throw new \Exception('Failed to sign TRA');
+            $error = openssl_error_string();
+            Log::error('Failed to sign TRA', ['openssl_error' => $error]);
+            throw new \Exception('Failed to sign TRA: ' . $error);
         }
 
         $cms = file_get_contents($cmsFile);
@@ -151,8 +189,15 @@ XML;
         unlink($traFile);
         unlink($cmsFile);
 
-        $cms = preg_replace('/^.+\n\n/', '', $cms);
-        $cms = preg_replace('/\n.+$/', '', $cms);
+        // Extraer contenido BASE64 entre BEGIN y END
+        if (preg_match('/-----BEGIN PKCS7-----(.+)-----END PKCS7-----/s', $cms, $matches)) {
+            $cms = preg_replace('/\s+/', '', $matches[1]);
+        } else {
+            // Fallback: remover headers y limpiar
+            $cms = preg_replace('/^.+\n\n/', '', $cms);
+            $cms = preg_replace('/\n-----END.+$/', '', $cms);
+            $cms = preg_replace('/\s+/', '', $cms);
+        }
 
         return $cms;
     }

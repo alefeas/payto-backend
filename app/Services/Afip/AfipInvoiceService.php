@@ -96,16 +96,33 @@ class AfipInvoiceService
 
             if (isset($result->Errors) && $result->Errors) {
                 $errors = is_array($result->Errors->Err) ? $result->Errors->Err : [$result->Errors->Err];
-                $errorMessages = array_map(fn($err) => "{$err->Code}: {$err->Msg}", $errors);
-                throw new \Exception('AFIP authorization failed: ' . implode(', ', $errorMessages));
+                $errorMessages = array_map(fn($err) => "[{$err->Code}] {$err->Msg}", $errors);
+                
+                Log::error('AFIP returned errors', [
+                    'invoice_id' => $invoice->id,
+                    'errors' => $errors,
+                ]);
+                
+                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
             }
 
             $detail = $result->FeDetResp->FECAEDetResponse;
 
             if ($detail->Resultado !== 'A') {
-                $obs = isset($detail->Observaciones) ? $detail->Observaciones->Obs : null;
-                $obsMsg = $obs ? "{$obs->Code}: {$obs->Msg}" : 'Unknown error';
-                throw new \Exception('Invoice not approved by AFIP: ' . $obsMsg);
+                $observations = [];
+                if (isset($detail->Observaciones)) {
+                    $obs = is_array($detail->Observaciones->Obs) ? $detail->Observaciones->Obs : [$detail->Observaciones->Obs];
+                    $observations = array_map(fn($o) => "[{$o->Code}] {$o->Msg}", $obs);
+                }
+                
+                Log::error('AFIP did not approve invoice', [
+                    'invoice_id' => $invoice->id,
+                    'resultado' => $detail->Resultado,
+                    'observations' => $observations,
+                ]);
+                
+                $obsMsg = !empty($observations) ? implode(' | ', $observations) : 'Sin detalles';
+                throw new \Exception('AFIP no aprobó la factura: ' . $obsMsg);
             }
 
             return [
