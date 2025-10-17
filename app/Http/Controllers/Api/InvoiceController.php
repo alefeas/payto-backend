@@ -80,6 +80,13 @@ class InvoiceController extends Controller
         $this->authorize('create', [Invoice::class, $company]);
 
         $hasAfipCertificate = $company->afipCertificate && $company->afipCertificate->is_active;
+        
+        if (!$hasAfipCertificate) {
+            return response()->json([
+                'message' => 'Certificado AFIP requerido',
+                'error' => 'Debes configurar tu certificado AFIP para emitir facturas electrónicas. Ve a Configuración → Verificar Perfil Fiscal.',
+            ], 403);
+        }
 
         $validated = $request->validate([
             'client_id' => 'required_without_all:client_data,receiver_company_id|exists:clients,id',
@@ -217,50 +224,42 @@ class InvoiceController extends Controller
                 }
             }
 
-            // Auto-authorize with AFIP if certificate is configured
-            if ($hasAfipCertificate) {
-                try {
-                    $invoice->load('perceptions');
-                    $afipService = new AfipInvoiceService($company);
-                    $afipResult = $afipService->authorizeInvoice($invoice);
-                    
-                    $invoice->update([
-                        'afip_cae' => $afipResult['cae'],
-                        'afip_cae_due_date' => $afipResult['cae_expiration'],
-                        'afip_status' => 'authorized',
-                        'status' => 'issued',
-                        'afip_sent_at' => now(),
-                    ]);
-                    
-                    // Generate PDF and TXT
-                    $pdfService = new \App\Services\InvoicePdfService();
-                    $pdfPath = $pdfService->generatePdf($invoice);
-                    $txtPath = $pdfService->generateTxt($invoice);
-                    
-                    $invoice->update([
-                        'pdf_url' => $pdfPath,
-                        'afip_txt_url' => $txtPath,
-                    ]);
-                } catch (\Exception $e) {
-                    DB::rollBack();
-                    
-                    Log::error('AFIP authorization failed - Invoice not created', [
-                        'company_id' => $companyId,
-                        'voucher_number' => $voucherNumber,
-                        'error' => $e->getMessage(),
-                    ]);
-                    
-                    return response()->json([
-                        'message' => 'AFIP rechazó la factura',
-                        'error' => $e->getMessage(),
-                    ], 422);
-                }
-            } else {
-                // Draft mode - no AFIP authorization
+            // Authorize with AFIP
+            try {
+                $invoice->load('perceptions');
+                $afipService = new AfipInvoiceService($company);
+                $afipResult = $afipService->authorizeInvoice($invoice);
+                
                 $invoice->update([
-                    'afip_status' => 'draft',
-                    'status' => 'draft',
+                    'afip_cae' => $afipResult['cae'],
+                    'afip_cae_due_date' => $afipResult['cae_expiration'],
+                    'afip_status' => 'approved',
+                    'status' => 'issued',
+                    'afip_sent_at' => now(),
                 ]);
+                
+                // Generate PDF and TXT
+                $pdfService = new \App\Services\InvoicePdfService();
+                $pdfPath = $pdfService->generatePdf($invoice);
+                $txtPath = $pdfService->generateTxt($invoice);
+                
+                $invoice->update([
+                    'pdf_url' => $pdfPath,
+                    'afip_txt_url' => $txtPath,
+                ]);
+            } catch (\Exception $e) {
+                DB::rollBack();
+                
+                Log::error('AFIP authorization failed - Invoice not created', [
+                    'company_id' => $companyId,
+                    'voucher_number' => $voucherNumber,
+                    'error' => $e->getMessage(),
+                ]);
+                
+                return response()->json([
+                    'message' => 'AFIP rechazó la factura',
+                    'error' => $e->getMessage(),
+                ], 422);
             }
 
             // Update company's last invoice number
@@ -270,14 +269,9 @@ class InvoiceController extends Controller
 
             DB::commit();
 
-            $message = $hasAfipCertificate 
-                ? 'Factura autorizada por AFIP exitosamente'
-                : 'Factura creada como borrador. Configura tu certificado AFIP para autorizarla.';
-            
             return response()->json([
-                'message' => $message,
+                'message' => 'Factura autorizada por AFIP exitosamente',
                 'invoice' => $invoice->load(['client', 'items', 'perceptions']),
-                'has_afip_certificate' => $hasAfipCertificate,
             ], 201);
 
         } catch (\Exception $e) {
