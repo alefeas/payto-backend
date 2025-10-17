@@ -106,20 +106,14 @@ class AfipCertificateService
         ?string $password = null,
         string $environment = 'testing'
     ): CompanyAfipCertificate {
+        if (!str_contains($certificateContent, 'BEGIN CERTIFICATE')) {
+            throw new \Exception('El contenido no es un certificado válido. Debe comenzar con -----BEGIN CERTIFICATE-----');
+        }
+        
         $certData = openssl_x509_parse($certificateContent);
         
         if (!$certData) {
-            throw new \Exception('Certificado inválido');
-        }
-
-        // Validar que no sea autofirmado en producción o si no está permitido
-        if ($this->isSelfSigned($certData)) {
-            if ($environment === 'production') {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos en producción.');
-            }
-            if (!config('afip.allow_self_signed_certs', false)) {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados están deshabilitados.');
-            }
+            throw new \Exception('No se pudo leer el certificado. Verifica que sea un archivo .crt válido de AFIP.');
         }
 
         // Extract CUIT from certificate
@@ -150,21 +144,49 @@ class AfipCertificateService
             throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
-        // Verificar que el certificado coincida con la clave privada existente
+        // VALIDACIÓN: Debe existir CSR y clave privada del flujo asistido
         $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
-        if ($existingCert && $existingCert->private_key_path && Storage::exists($existingCert->private_key_path)) {
-            $keyContent = Storage::get($existingCert->private_key_path);
-            $privKey = openssl_pkey_get_private($keyContent, $password);
-            
-            if ($privKey) {
-                $pubKey = openssl_pkey_get_public($certificateContent);
-                $pubDetails = openssl_pkey_get_details($pubKey);
-                $privDetails = openssl_pkey_get_details($privKey);
-                
-                if ($pubDetails['key'] !== $privDetails['key']) {
-                    throw new \Exception('El certificado no coincide con la clave privada existente. Genera un nuevo CSR y solicita un certificado con ese CSR.');
-                }
-            }
+        
+        if (!$existingCert || !$existingCert->csr_path || !Storage::exists($existingCert->csr_path)) {
+            throw new \Exception('Primero debes generar un CSR haciendo clic en "Generar CSR", o usa el método Manual para subir certificado y clave privada juntos.');
+        }
+        
+        if (!$existingCert->private_key_path || !Storage::exists($existingCert->private_key_path)) {
+            throw new \Exception('No hay una clave privada generada. Debes generar un nuevo CSR o usar el método manual.');
+        }
+        
+        // Extraer clave pública del CSR
+        $csrContent = Storage::get($existingCert->csr_path);
+        $csrPubKey = openssl_csr_get_public_key($csrContent);
+        
+        if (!$csrPubKey) {
+            throw new \Exception('No se pudo extraer la clave pública del CSR.');
+        }
+        
+        $csrDetails = openssl_pkey_get_details($csrPubKey);
+        
+        // Extraer clave pública del certificado
+        $certPubKey = openssl_pkey_get_public($certificateContent);
+        if (!$certPubKey) {
+            throw new \Exception('No se pudo leer la clave pública del certificado.');
+        }
+        
+        $certDetails = openssl_pkey_get_details($certPubKey);
+        
+        if (!$csrDetails || !$certDetails) {
+            throw new \Exception('Error al validar las claves.');
+        }
+        
+        // Comparar módulos RSA
+        $csrModulus = $csrDetails['rsa']['n'] ?? null;
+        $certModulus = $certDetails['rsa']['n'] ?? null;
+        
+        if (!$csrModulus || !$certModulus) {
+            throw new \Exception('No se pudieron extraer los módulos RSA para validación.');
+        }
+        
+        if ($csrModulus !== $certModulus) {
+            throw new \Exception('El certificado no coincide con el CSR generado. Genera un nuevo certificado en AFIP usando el CSR actual, o usa el método Manual.');
         }
         
         $certPath = "afip/certificates/{$company->id}/certificate.crt";
@@ -197,20 +219,18 @@ class AfipCertificateService
         ?string $password = null,
         string $environment = 'testing'
     ): CompanyAfipCertificate {
+        if (!str_contains($certificateContent, 'BEGIN CERTIFICATE')) {
+            throw new \Exception('El certificado no es válido. Debe comenzar con -----BEGIN CERTIFICATE-----');
+        }
+        
+        if (!str_contains($privateKeyContent, 'BEGIN') || !str_contains($privateKeyContent, 'PRIVATE KEY')) {
+            throw new \Exception('La clave privada no es válida. Debe comenzar con -----BEGIN PRIVATE KEY----- o -----BEGIN RSA PRIVATE KEY-----');
+        }
+        
         $certData = openssl_x509_parse($certificateContent);
         
         if (!$certData) {
-            throw new \Exception('Certificado inválido');
-        }
-
-        // Validar que no sea autofirmado en producción o si no está permitido
-        if ($this->isSelfSigned($certData)) {
-            if ($environment === 'production') {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados no son válidos en producción.');
-            }
-            if (!config('afip.allow_self_signed_certs', false)) {
-                throw new \Exception('El certificado debe estar firmado por AFIP. Los certificados autofirmados están deshabilitados.');
-            }
+            throw new \Exception('No se pudo leer el certificado.');
         }
 
         // Extract CUIT from certificate
@@ -248,8 +268,16 @@ class AfipCertificateService
         }
         
         $pubKey = openssl_pkey_get_public($certificateContent);
+        if (!$pubKey) {
+            throw new \Exception('No se pudo leer la clave pública del certificado');
+        }
+        
         $pubDetails = openssl_pkey_get_details($pubKey);
         $privDetails = openssl_pkey_get_details($privKey);
+        
+        if (!$pubDetails || !$privDetails) {
+            throw new \Exception('Error al validar las claves');
+        }
         
         if ($pubDetails['key'] !== $privDetails['key']) {
             throw new \Exception('El certificado y la clave privada no coinciden');
@@ -268,7 +296,7 @@ class AfipCertificateService
                 'private_key_path' => $keyPath,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
-                'valid_until' => date('Y-m-d', $certData['validTo_t']),
+                'valid_until' => date('Y-m-d', $certData['validTo_time_t']),
                 'environment' => $environment,
                 'is_active' => true,
             ]

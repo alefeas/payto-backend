@@ -15,7 +15,12 @@ class AfipCertificateController extends Controller
 {
     public function generateCSR(Request $request, $companyId)
     {
-        $company = Auth::user()->companies()->findOrFail($companyId);
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
         
         $cuit = preg_replace('/[^0-9]/', '', $company->national_id ?: '');
         $companyName = $company->business_name ?: $company->name;
@@ -53,7 +58,11 @@ class AfipCertificateController extends Controller
         }
 
         $dn = [
-            'CN' => $companyName,
+            'countryName' => 'AR',
+            'stateOrProvinceName' => 'Buenos Aires',
+            'localityName' => 'CABA',
+            'organizationName' => $companyName,
+            'commonName' => $cuit,
             'serialNumber' => "CUIT {$cuit}",
         ];
 
@@ -62,8 +71,33 @@ class AfipCertificateController extends Controller
             return response()->json(['error' => 'Error al generar CSR'], 500);
         }
 
-        openssl_csr_export($csr, $csrOut);
-        openssl_pkey_export($privKey, $privKeyOut);
+        $csrOut = '';
+        $privKeyOut = '';
+        
+        if (!openssl_csr_export($csr, $csrOut)) {
+            return response()->json(['error' => 'Error al exportar CSR'], 500);
+        }
+        
+        if (!openssl_pkey_export($privKey, $privKeyOut, null, $config)) {
+            return response()->json(['error' => 'Error al exportar clave privada'], 500);
+        }
+        
+        // GUARDAR CSR y clave privada en el sistema
+        $csrPath = "afip/certificates/{$company->id}/csr.pem";
+        $keyPath = "afip/certificates/{$company->id}/private.key";
+        
+        \Storage::put($csrPath, $csrOut);
+        \Storage::put($keyPath, $privKeyOut);
+        
+        // Crear o actualizar registro en la base de datos
+        CompanyAfipCertificate::updateOrCreate(
+            ['company_id' => $company->id],
+            [
+                'csr_path' => $csrPath,
+                'private_key_path' => $keyPath,
+                'is_active' => false,
+            ]
+        );
 
         return response()->json([
             'csr' => $csrOut,
@@ -73,7 +107,12 @@ class AfipCertificateController extends Controller
 
     public function show($companyId)
     {
-        $company = Auth::user()->companies()->findOrFail($companyId);
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
         $certificate = $company->afipCertificates()->where('is_active', true)->first();
 
         if (!$certificate) {
@@ -85,17 +124,94 @@ class AfipCertificateController extends Controller
 
     public function uploadCertificate(Request $request, $companyId)
     {
-        return $this->store($request);
+        return $this->store($request, $companyId);
     }
 
     public function uploadManual(Request $request, $companyId)
     {
-        return $this->store($request);
+        return $this->store($request, $companyId);
+    }
+    
+    public function uploadWithCSR(Request $request, $companyId)
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
+        
+        try {
+            $csrContent = $request->input('csr');
+            $certContent = $request->input('certificate');
+            $environment = $request->input('environment', 'testing');
+            
+            if (!$csrContent || !$certContent) {
+                throw new \Exception('Debes proporcionar el CSR y el certificado');
+            }
+            
+            // Extraer clave privada del CSR (si está incluida)
+            $csrPubKey = openssl_csr_get_public_key($csrContent);
+            if (!$csrPubKey) {
+                throw new \Exception('CSR inválido');
+            }
+            
+            // Validar que el certificado coincida con el CSR
+            $certPubKey = openssl_pkey_get_public($certContent);
+            if (!$certPubKey) {
+                throw new \Exception('Certificado inválido');
+            }
+            
+            $csrDetails = openssl_pkey_get_details($csrPubKey);
+            $certDetails = openssl_pkey_get_details($certPubKey);
+            
+            if ($csrDetails['rsa']['n'] !== $certDetails['rsa']['n']) {
+                throw new \Exception('El certificado NO coincide con el CSR proporcionado');
+            }
+            
+            // Buscar si ya existe un certificado con clave privada
+            $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
+            if (!$existingCert || !$existingCert->private_key_path || !Storage::exists($existingCert->private_key_path)) {
+                throw new \Exception('No se encontró la clave privada. Usa el método manual para subir certificado y clave privada juntos.');
+            }
+            
+            // Guardar CSR
+            $csrPath = "afip/certificates/{$company->id}/csr.pem";
+            Storage::put($csrPath, $csrContent);
+            
+            $existingCert->update(['csr_path' => $csrPath]);
+            
+            // Ahora usar el método normal
+            $certificateService = new AfipCertificateService();
+            $certificate = $certificateService->uploadCertificate(
+                $company,
+                $certContent,
+                null,
+                $environment
+            );
+            
+            return response()->json([
+                'message' => 'Certificado configurado exitosamente',
+                'data' => new AfipCertificateResource($certificate),
+            ], 201);
+            
+        } catch (\Exception $e) {
+            \Log::error('Certificate with CSR upload failed', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
     }
 
     public function testConnection($companyId)
     {
-        $company = Auth::user()->companies()->findOrFail($companyId);
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
         $certificate = $company->afipCertificates()->where('is_active', true)->first();
 
         if (!$certificate) {
@@ -111,40 +227,122 @@ class AfipCertificateController extends Controller
         }
     }
 
-    public function store(Request $request)
+    public function store(Request $request, $companyId = null)
     {
-        $request->validate([
-            'certificate' => 'required|file|mimes:crt,pem',
-            'private_key' => 'required|file|mimes:key,pem',
-            'password' => 'nullable|string',
-            'environment' => 'required|in:testing,production',
-        ]);
-
-        $company = Auth::user()->company;
+        $user = Auth::user();
+        
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        // Si viene companyId en la URL, usar esa empresa
+        if ($companyId) {
+            $company = $user->companies()->findOrFail($companyId);
+        } else {
+            // Fallback al método anterior
+            $company = $user->company;
+            if (!$company) {
+                $company = $user->companies()->first();
+            }
+            if (!$company) {
+                return response()->json(['error' => 'No se encontró una empresa asociada al usuario'], 400);
+            }
+        }
 
         try {
+            // Log para debugging
+            \Log::info('Certificate upload attempt', [
+                'has_file' => $request->hasFile('certificate'),
+                'has_input' => $request->has('certificate'),
+                'all_keys' => array_keys($request->all()),
+                'files_keys' => array_keys($request->allFiles()),
+            ]);
+            
+            // Validar que al menos venga el certificado
+            if (!$request->hasFile('certificate') && !$request->has('certificate')) {
+                throw new \Exception('Debe proporcionar un certificado');
+            }
+
+            // Obtener contenido del certificado
+            $certContent = null;
+            if ($request->hasFile('certificate')) {
+                $certFile = $request->file('certificate');
+                \Log::info('Certificate file received', [
+                    'is_valid' => $certFile->isValid(),
+                    'size' => $certFile->getSize(),
+                    'mime' => $certFile->getMimeType(),
+                ]);
+                if ($certFile->isValid()) {
+                    $certContent = file_get_contents($certFile->getRealPath());
+                }
+            } elseif ($request->has('certificate')) {
+                $certContent = $request->input('certificate');
+                \Log::info('Certificate text received', [
+                    'length' => strlen($certContent),
+                    'starts_with' => substr($certContent, 0, 50),
+                ]);
+            }
+
+            if (!$certContent) {
+                \Log::error('Certificate content is empty');
+                throw new \Exception('No se pudo leer el certificado');
+            }
+            
+            \Log::info('Certificate content loaded', [
+                'length' => strlen($certContent),
+                'has_begin' => str_contains($certContent, 'BEGIN CERTIFICATE'),
+            ]);
+
+            // Obtener contenido de la clave privada si existe
+            $keyContent = null;
+            if ($request->hasFile('private_key')) {
+                $keyFile = $request->file('private_key');
+                if ($keyFile->isValid()) {
+                    $keyContent = file_get_contents($keyFile->getRealPath());
+                }
+            } elseif ($request->has('private_key')) {
+                $keyContent = $request->input('private_key');
+            }
+
             $certificateService = new AfipCertificateService();
             
-            $certificate = $certificateService->storeCertificate(
-                $company,
-                $request->file('certificate'),
-                $request->file('private_key'),
-                $request->password,
-                $request->environment
-            );
+            if ($keyContent) {
+                // Manual upload with both certificate and key
+                $certificate = $certificateService->uploadManualCertificate(
+                    $company,
+                    $certContent,
+                    $keyContent,
+                    $request->password,
+                    $request->environment ?? 'testing'
+                );
+            } else {
+                // Assisted upload with only certificate
+                $certificate = $certificateService->uploadCertificate(
+                    $company,
+                    $certContent,
+                    $request->password,
+                    $request->environment ?? 'testing'
+                );
+            }
 
             return response()->json([
-                'message' => 'Certificate uploaded successfully',
+                'message' => 'Certificado configurado exitosamente',
                 'data' => new AfipCertificateResource($certificate),
             ], 201);
         } catch (\Exception $e) {
+            \Log::error('Certificate upload failed', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json(['error' => $e->getMessage()], 400);
         }
     }
 
     public function update(Request $request, CompanyAfipCertificate $certificate)
     {
-        if ($certificate->company_id !== Auth::user()->company_id) {
+        $user = Auth::user();
+        if (!$user || $certificate->company_id !== $user->company_id) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -162,7 +360,12 @@ class AfipCertificateController extends Controller
 
     public function destroy($companyId)
     {
-        $company = Auth::user()->companies()->findOrFail($companyId);
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['error' => 'No autenticado'], 401);
+        }
+        
+        $company = $user->companies()->findOrFail($companyId);
         
         $certificateService = new AfipCertificateService();
         $certificateService->deleteCertificate($company);
@@ -172,7 +375,8 @@ class AfipCertificateController extends Controller
 
     public function activate(CompanyAfipCertificate $certificate)
     {
-        if ($certificate->company_id !== Auth::user()->company_id) {
+        $user = Auth::user();
+        if (!$user || $certificate->company_id !== $user->company_id) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
@@ -187,7 +391,8 @@ class AfipCertificateController extends Controller
 
     public function verify(CompanyAfipCertificate $certificate)
     {
-        if ($certificate->company_id !== Auth::user()->company_id) {
+        $user = Auth::user();
+        if (!$user || $certificate->company_id !== $user->company_id) {
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
