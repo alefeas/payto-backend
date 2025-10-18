@@ -12,7 +12,13 @@
         .client-info { border: 1px solid #cbd5e1; padding: 8px; margin-bottom: 10px; }
         .items-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9px; }
         .items-table th { background: #3b82f6; color: white; padding: 6px 4px; text-align: left; }
+        .items-table th.text-right { text-align: right; }
         .items-table td { border-bottom: 1px solid #e2e8f0; padding: 4px; }
+        .iva-breakdown { width: 50%; margin-left: auto; font-size: 9px; border: 1px solid #cbd5e1; margin-bottom: 10px; }
+        .iva-breakdown th { background: #f1f5f9; padding: 4px; text-align: left; font-weight: bold; }
+        .iva-breakdown td { padding: 4px; border-bottom: 1px solid #e2e8f0; }
+        .notes-box { border: 1px solid #cbd5e1; padding: 8px; margin-bottom: 10px; background: #fefce8; font-size: 9px; }
+        .payment-info { border: 1px solid #cbd5e1; padding: 8px; margin-bottom: 10px; background: #f0fdf4; font-size: 9px; }
         .totals { text-align: right; padding: 8px; background: #f8fafc; }
         .cae-box { border: 2px solid #3b82f6; padding: 8px; margin-top: 10px; background: #eff6ff; font-size: 9px; }
         .text-right { text-align: right; }
@@ -66,10 +72,11 @@
         <thead>
             <tr>
                 <th>Descripción</th>
-                <th style="width: 80px;">Cantidad</th>
-                <th style="width: 100px;">Precio Unit.</th>
-                <th style="width: 60px;">IVA %</th>
-                <th style="width: 100px;">Subtotal</th>
+                <th class="text-right" style="width: 70px;">Cantidad</th>
+                <th class="text-right" style="width: 90px;">Precio Unit.</th>
+                <th class="text-right" style="width: 60px;">Bonif. %</th>
+                <th class="text-right" style="width: 50px;">IVA %</th>
+                <th class="text-right" style="width: 90px;">Subtotal</th>
             </tr>
         </thead>
         <tbody>
@@ -78,21 +85,101 @@
                 <td>{{ $item->description }}</td>
                 <td class="text-right">{{ number_format($item->quantity, 2) }}</td>
                 <td class="text-right">${{ number_format($item->unit_price, 2) }}</td>
-                <td class="text-right">{{ $item->tax_rate }}%</td>
+                <td class="text-right">{{ $item->discount_percentage > 0 ? number_format($item->discount_percentage, 2) . '%' : '-' }}</td>
+                <td class="text-right">
+                    @if($item->tax_rate == -1)
+                        Exento
+                    @elseif($item->tax_rate == -2)
+                        No Grav.
+                    @else
+                        {{ number_format($item->tax_rate, 2) }}%
+                    @endif
+                </td>
                 <td class="text-right">${{ number_format($item->subtotal, 2) }}</td>
             </tr>
             @endforeach
         </tbody>
     </table>
 
+    @php
+        // Group items by tax rate for IVA breakdown
+        $ivaBreakdown = [];
+        foreach($invoice->items as $item) {
+            $rate = $item->tax_rate;
+            if ($rate > 0) {
+                if (!isset($ivaBreakdown[$rate])) {
+                    $ivaBreakdown[$rate] = ['base' => 0, 'tax' => 0];
+                }
+                $ivaBreakdown[$rate]['base'] += $item->subtotal;
+                $ivaBreakdown[$rate]['tax'] += $item->tax_amount;
+            }
+        }
+    @endphp
+
+    @if(count($ivaBreakdown) > 0)
+    <table class="iva-breakdown">
+        <thead>
+            <tr>
+                <th style="width: 30%;">Alícuota</th>
+                <th class="text-right" style="width: 35%;">Base Imponible</th>
+                <th class="text-right" style="width: 35%;">IVA</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach($ivaBreakdown as $rate => $amounts)
+            <tr>
+                <td>IVA {{ number_format($rate, 2) }}%</td>
+                <td class="text-right">${{ number_format($amounts['base'], 2) }}</td>
+                <td class="text-right">${{ number_format($amounts['tax'], 2) }}</td>
+            </tr>
+            @endforeach
+        </tbody>
+    </table>
+    @endif
+
+    @if($invoice->perceptions && $invoice->perceptions->count() > 0)
+    <div style="border: 1px solid #cbd5e1; padding: 8px; margin-bottom: 10px; background: #fef3c7; font-size: 9px;">
+        <h4 style="margin: 0 0 5px 0; font-size: 10px; color: #92400e;">Percepciones Aplicadas:</h4>
+        @foreach($invoice->perceptions as $perception)
+        <p style="margin: 2px 0;">
+            <strong>{{ $perception->name }}:</strong> 
+            {{ number_format($perception->rate, 2) }}% sobre ${{ number_format($perception->base_amount, 2) }} = 
+            <strong>${{ number_format($perception->amount, 2) }}</strong>
+        </p>
+        @endforeach
+    </div>
+    @endif
+
     <div class="totals">
         <p><strong>Subtotal:</strong> ${{ number_format($invoice->subtotal, 2) }}</p>
         <p><strong>IVA:</strong> ${{ number_format($invoice->total_taxes, 2) }}</p>
         @if($invoice->total_perceptions > 0)
-        <p><strong>Percepciones:</strong> ${{ number_format($invoice->total_perceptions, 2) }}</p>
+        <p><strong>Total Percepciones:</strong> ${{ number_format($invoice->total_perceptions, 2) }}</p>
         @endif
         <h3><strong>TOTAL:</strong> ${{ number_format($invoice->total, 2) }}</h3>
     </div>
+
+    @if($invoice->notes)
+    <div class="notes-box">
+        <h4 style="margin: 0 0 5px 0; font-size: 10px;">Observaciones:</h4>
+        <p style="margin: 0;">{{ $invoice->notes }}</p>
+    </div>
+    @endif
+
+    @if($company->bankAccounts && $company->bankAccounts->count() > 0)
+    @php
+        $primaryAccount = $company->bankAccounts->where('is_primary', true)->first() ?? $company->bankAccounts->first();
+    @endphp
+    <div class="payment-info">
+        <h4 style="margin: 0 0 5px 0; font-size: 10px;">Datos para Transferencia Bancaria:</h4>
+        <p style="margin: 2px 0;"><strong>Banco:</strong> {{ $primaryAccount->bank_name }}</p>
+        <p style="margin: 2px 0;"><strong>CBU:</strong> {{ $primaryAccount->cbu }}</p>
+        @if($primaryAccount->alias)
+        <p style="margin: 2px 0;"><strong>Alias:</strong> {{ $primaryAccount->alias }}</p>
+        @endif
+        <p style="margin: 2px 0;"><strong>Titular:</strong> {{ $company->business_name ?? $company->name }}</p>
+    </div>
+    @endif
 
     @if($invoice->afip_cae)
     <div class="cae-box">

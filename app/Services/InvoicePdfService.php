@@ -11,7 +11,7 @@ class InvoicePdfService
     public function generatePdf(Invoice $invoice): string
     {
         try {
-            $invoice->load(['issuerCompany.address', 'client', 'receiverCompany', 'items', 'perceptions']);
+            $invoice->load(['issuerCompany.address', 'issuerCompany.bankAccounts', 'client', 'receiverCompany', 'items', 'perceptions']);
             
             // Generate barcode and QR if CAE exists
             $barcodeBase64 = null;
@@ -149,6 +149,19 @@ class InvoicePdfService
         if ($invoice->afip_cae) {
             $lines[] = $invoice->afip_cae;
             $lines[] = $invoice->afip_cae_due_date->format('Ymd');
+        }
+        
+        // Add items detail with discounts
+        $lines[] = '';
+        $lines[] = 'ITEMS:';
+        foreach ($invoice->items as $item) {
+            $itemLine = $item->description . '|' . 
+                        $item->quantity . '|' . 
+                        number_format($item->unit_price, 2, '.', '') . '|' . 
+                        ($item->discount_percentage ?? 0) . '%|' . 
+                        $item->tax_rate . '%|' . 
+                        number_format($item->subtotal, 2, '.', '');
+            $lines[] = $itemLine;
         }
         
         $content = implode("\n", $lines);
