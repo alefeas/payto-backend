@@ -22,14 +22,14 @@ class SalesPointController extends Controller
     public function store(Request $request, $companyId)
     {
         $user = Auth::user();
-        $company = $user->companies()->findOrFail($companyId);
+        $company = $user->companies()->with('afipCertificate')->findOrFail($companyId);
         
         $request->validate([
             'point_number' => 'required|integer|min:1|max:9999',
             'name' => 'nullable|string|max:100',
         ]);
         
-        // Verificar que no exista
+        // Verificar que no exista localmente
         $exists = CompanySalesPoint::where('company_id', $company->id)
             ->where('point_number', $request->point_number)
             ->exists();
@@ -38,14 +38,54 @@ class SalesPointController extends Controller
             return response()->json(['error' => 'El punto de venta ya existe'], 422);
         }
         
-        $salesPoint = CompanySalesPoint::create([
-            'company_id' => $company->id,
-            'point_number' => $request->point_number,
-            'name' => $request->name,
-            'is_active' => true,
-        ]);
+        // Validar con AFIP que el punto de venta esté autorizado
+        if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+            return response()->json(['error' => 'Certificado AFIP requerido para validar puntos de venta'], 403);
+        }
         
-        return response()->json(['data' => $salesPoint], 201);
+        try {
+            $webServiceClient = new \App\Services\Afip\AfipWebServiceClient(
+                $company->afipCertificate,
+                'wsfe'
+            );
+            
+            $afipSalesPoints = $webServiceClient->getSalesPoints();
+            
+            $existsInAfip = false;
+            $afipDescription = null;
+            
+            foreach ($afipSalesPoints as $afipSp) {
+                if ($afipSp['point_number'] == $request->point_number) {
+                    if ($afipSp['blocked'] || $afipSp['drop_date']) {
+                        return response()->json([
+                            'error' => 'Este punto de venta está bloqueado o dado de baja en AFIP'
+                        ], 422);
+                    }
+                    $existsInAfip = true;
+                    $afipDescription = $afipSp['description'];
+                    break;
+                }
+            }
+            
+            if (!$existsInAfip) {
+                return response()->json([
+                    'error' => 'Este punto de venta no está autorizado en AFIP. Primero debes darlo de alta en el portal de AFIP.'
+                ], 422);
+            }
+            
+            // Si existe en AFIP, crear con la descripción de AFIP si no se proporcionó una
+            $salesPoint = CompanySalesPoint::create([
+                'company_id' => $company->id,
+                'point_number' => $request->point_number,
+                'name' => $request->name ?: $afipDescription,
+                'is_active' => true,
+            ]);
+            
+            return response()->json(['data' => $salesPoint], 201);
+            
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Error al validar con AFIP: ' . $e->getMessage()], 500);
+        }
     }
 
     public function update(Request $request, $companyId, $salesPointId)
