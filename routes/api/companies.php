@@ -66,4 +66,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/companies/{companyId}/collections/{collectionId}', [App\Http\Controllers\Api\CollectionController::class, 'update']);
     Route::post('/companies/{companyId}/collections/{collectionId}/confirm', [App\Http\Controllers\Api\CollectionController::class, 'confirm']);
     Route::post('/companies/{companyId}/collections/{collectionId}/reject', [App\Http\Controllers\Api\CollectionController::class, 'reject']);
+    
+    // Custom perceptions routes
+    Route::get('/companies/{companyId}/custom-perceptions', [App\Http\Controllers\Api\CustomPerceptionController::class, 'index']);
+    Route::post('/companies/{companyId}/custom-perceptions', [App\Http\Controllers\Api\CustomPerceptionController::class, 'store']);
+    Route::delete('/companies/{companyId}/custom-perceptions/{id}', [App\Http\Controllers\Api\CustomPerceptionController::class, 'destroy']);
 });

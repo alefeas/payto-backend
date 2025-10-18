@@ -114,9 +114,12 @@ class InvoiceController extends Controller
             'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
             'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
             'perceptions' => 'nullable|array',
-            'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,social_security_perception',
-            'perceptions.*.name' => 'required|string',
-            'perceptions.*.rate' => 'required|numeric|min:0|max:100',
+            'perceptions.*.type' => 'required|string|max:100',
+            'perceptions.*.name' => 'required|string|max:100',
+            'perceptions.*.rate' => 'nullable|numeric|min:0|max:100',
+            'perceptions.*.amount' => 'nullable|numeric|min:0',
+            'perceptions.*.jurisdiction' => 'nullable|string|max:100',
+            'perceptions.*.base_type' => 'nullable|in:net,total,vat',
         ]);
 
         try {
@@ -180,10 +183,18 @@ class InvoiceController extends Controller
             $totalPerceptions = 0;
             if (isset($validated['perceptions'])) {
                 foreach ($validated['perceptions'] as $perception) {
-                    $baseAmount = $perception['type'] === 'vat_perception' 
-                        ? $totalTaxes 
-                        : ($subtotal + $totalTaxes);
-                    $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
+                    // Allow fixed amount or calculate from rate
+                    if (isset($perception['amount']) && $perception['amount'] > 0) {
+                        $totalPerceptions += $perception['amount'];
+                    } else {
+                        $baseAmount = $this->calculatePerceptionBase(
+                            $perception['type'],
+                            $perception['base_type'] ?? null,
+                            $subtotal,
+                            $totalTaxes
+                        );
+                        $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
+                    }
                 }
             }
 
@@ -237,15 +248,26 @@ class InvoiceController extends Controller
             // Create perceptions
             if (isset($validated['perceptions'])) {
                 foreach ($validated['perceptions'] as $perception) {
-                    $baseAmount = $perception['type'] === 'vat_perception' 
-                        ? $totalTaxes 
-                        : ($subtotal + $totalTaxes);
-                    $amount = $baseAmount * ($perception['rate'] / 100);
+                    // Allow fixed amount or calculate from rate
+                    if (isset($perception['amount']) && $perception['amount'] > 0) {
+                        $amount = $perception['amount'];
+                        $baseAmount = $subtotal; // Default base for display
+                    } else {
+                        $baseAmount = $this->calculatePerceptionBase(
+                            $perception['type'],
+                            $perception['base_type'] ?? null,
+                            $subtotal,
+                            $totalTaxes
+                        );
+                        $amount = $baseAmount * ($perception['rate'] / 100);
+                    }
 
                     $invoice->perceptions()->create([
                         'type' => $perception['type'],
                         'name' => $perception['name'],
-                        'rate' => $perception['rate'],
+                        'rate' => $perception['rate'] ?? 0,
+                        'base_type' => $perception['base_type'] ?? $this->getDefaultBaseType($perception['type']),
+                        'jurisdiction' => $perception['jurisdiction'] ?? null,
                         'base_amount' => $baseAmount,
                         'amount' => $amount,
                     ]);
@@ -821,5 +843,27 @@ class InvoiceController extends Controller
                 'formatted_number' => sprintf('%04d-%08d', $validated['sales_point'], 1),
             ], 200);
         }
+    }
+
+    private function calculatePerceptionBase(string $type, ?string $baseType, float $subtotal, float $totalTaxes): float
+    {
+        // If base_type is explicitly provided, use it
+        if ($baseType) {
+            return match($baseType) {
+                'vat' => $totalTaxes,
+                'total' => $subtotal + $totalTaxes,
+                'net' => $subtotal,
+                default => $subtotal,
+            };
+        }
+
+        // ALL perceptions and retentions apply on NET amount (without IVA) by default
+        return $subtotal;
+    }
+
+    private function getDefaultBaseType(string $type): string
+    {
+        // All perceptions default to net (without IVA)
+        return 'net';
     }
 }

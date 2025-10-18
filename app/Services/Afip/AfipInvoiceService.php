@@ -562,9 +562,9 @@ class AfipInvoiceService
             $tributos[] = [
                 'Id' => $this->getAfipTributoId($perception->type),
                 'Desc' => $perception->name,
-                'BaseImp' => $perception->base_amount,
-                'Alic' => $perception->rate,
-                'Importe' => $perception->amount,
+                'BaseImp' => round($perception->base_amount, 2),
+                'Alic' => round($perception->rate, 2),
+                'Importe' => round($perception->amount, 2),
             ];
         }
 
