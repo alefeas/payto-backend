@@ -185,25 +185,34 @@ class AnalyticsController extends Controller
 
     public function getPendingInvoices($companyId)
     {
-        // Facturas a cobrar (emitidas por mi, no pagadas)
-        $toCollect = Invoice::where('issuer_company_id', $companyId)
-            ->whereIn('status', ['issued', 'approved'])
-            ->count();
+        try {
+            // Facturas a cobrar (emitidas por mi, no pagadas)
+            $toCollect = Invoice::where('issuer_company_id', $companyId)
+                ->whereIn('status', ['issued', 'approved'])
+                ->count();
 
-        // Facturas a pagar (recibidas, aprobadas pero no pagadas)
-        $toPay = Invoice::where('receiver_company_id', $companyId)
-            ->where('status', 'approved')
-            ->count();
+            // Facturas a pagar (recibidas, aprobadas pero no pagadas)
+            $toPay = Invoice::where('receiver_company_id', $companyId)
+                ->where('status', 'approved')
+                ->count();
 
-        // Facturas pendientes de aprobar
-        $pendingApprovals = Invoice::where('receiver_company_id', $companyId)
-            ->where('status', 'pending_approval')
-            ->count();
+            // Facturas pendientes de aprobar (simplemente contar las que tienen ese estado)
+            $pendingApprovals = Invoice::where('receiver_company_id', $companyId)
+                ->where('status', 'pending_approval')
+                ->count();
 
-        return response()->json([
-            'to_collect' => $toCollect,
-            'to_pay' => $toPay,
-            'pending_approvals' => $pendingApprovals
-        ]);
+            return response()->json([
+                'to_collect' => $toCollect,
+                'to_pay' => $toPay,
+                'pending_approvals' => $pendingApprovals
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error in getPendingInvoices: ' . $e->getMessage());
+            return response()->json([
+                'to_collect' => 0,
+                'to_pay' => 0,
+                'pending_approvals' => 0
+            ]);
+        }
     }
 }

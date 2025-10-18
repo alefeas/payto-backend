@@ -98,6 +98,8 @@ class CompanyController extends Controller
         return $this->success($company, 'Configuración de percepciones actualizada exitosamente');
     }
 
+
+
     public function updateRetentionConfig(Request $request, string $id): JsonResponse
     {
         $validated = $request->validate([

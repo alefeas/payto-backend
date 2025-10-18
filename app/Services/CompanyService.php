@@ -182,7 +182,7 @@ class CompanyService implements CompanyServiceInterface
             'tax_condition' => isset($data['tax_condition']) ? $data['tax_condition'] : $company->tax_condition,
             'default_sales_point' => $data['default_sales_point'] ?? $company->default_sales_point,
             'last_invoice_number' => $data['last_invoice_number'] ?? $company->last_invoice_number,
-            'required_approvals' => $data['required_approvals'] ?? $company->required_approvals,
+            'required_approvals' => isset($data['required_approvals']) ? (int)$data['required_approvals'] : $company->required_approvals,
             'is_perception_agent' => $data['is_perception_agent'] ?? $company->is_perception_agent,
             'auto_perceptions' => $data['auto_perceptions'] ?? $company->auto_perceptions,
             'is_retention_agent' => $data['is_retention_agent'] ?? $company->is_retention_agent,
@@ -224,15 +224,33 @@ class CompanyService implements CompanyServiceInterface
         $company->update($updateData);
         $company->refresh();
 
-        // Auto-approve pending invoices if required_approvals was reduced
+        // Auto-approve pending invoices based on new required_approvals
         if (isset($data['required_approvals'])) {
+            $newRequiredApprovals = (int)$data['required_approvals'];
+            
+            // Update all pending invoices with new requirement
             \App\Models\Invoice::where('receiver_company_id', $companyId)
                 ->where('status', 'pending_approval')
-                ->where('approvals_received', '>=', $data['required_approvals'])
-                ->update([
-                    'status' => 'approved',
-                    'approval_date' => now(),
-                ]);
+                ->update(['approvals_required' => $newRequiredApprovals]);
+            
+            // If 0, approve all pending invoices
+            if ($newRequiredApprovals === 0) {
+                \App\Models\Invoice::where('receiver_company_id', $companyId)
+                    ->where('status', 'pending_approval')
+                    ->update([
+                        'status' => 'approved',
+                        'approval_date' => now(),
+                    ]);
+            } else {
+                // If > 0, approve those that already have enough approvals
+                \App\Models\Invoice::where('receiver_company_id', $companyId)
+                    ->where('status', 'pending_approval')
+                    ->where('approvals_received', '>=', $newRequiredApprovals)
+                    ->update([
+                        'status' => 'approved',
+                        'approval_date' => now(),
+                    ]);
+            }
         }
 
         $this->auditService->log(
@@ -333,7 +351,7 @@ class CompanyService implements CompanyServiceInterface
             'incomeTaxRetention' => $billing?->income_tax_retention ?? 2,
             'grossIncomeRetention' => $billing?->gross_income_retention ?? 0.42,
             'socialSecurityRetention' => $billing?->social_security_retention ?? 0,
-            'requiredApprovals' => $company->required_approvals ?? 1,
+            'requiredApprovals' => $company->required_approvals ?? 0,
             'isPerceptionAgent' => $company->is_perception_agent ?? false,
             'autoPerceptions' => $company->auto_perceptions ?? [],
             'isRetentionAgent' => $company->is_retention_agent ?? false,

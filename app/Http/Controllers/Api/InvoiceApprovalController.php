@@ -40,7 +40,11 @@ class InvoiceApprovalController extends Controller
 
         // Check if invoice has enough approvals
         $company = $invoice->receiverCompany;
-        if ($invoice->approvals_received >= $company->required_approvals) {
+        $requiredApprovals = $company->required_approvals ?? 0;
+        
+        // If required_approvals is 0, it means no approval is needed
+        // If required_approvals > 0, check if we have enough approvals
+        if ($requiredApprovals === 0 || $invoice->approvals_received >= $requiredApprovals) {
             $invoice->update([
                 'status' => 'approved',
                 'approval_date' => now(),

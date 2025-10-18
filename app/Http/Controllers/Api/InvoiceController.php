@@ -526,7 +526,7 @@ class InvoiceController extends Controller
             $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
 
             // Determinar estado inicial basado en configuración de aprobaciones
-            $requiresApproval = $company->required_approvals > 0;
+            $requiredApprovals = (int)($company->required_approvals ?? 0);
             
             // Crear factura recibida
             // NOTA: issuer_company_id se usa como placeholder (mismo que receiver) para cumplir constraint
@@ -549,11 +549,11 @@ class InvoiceController extends Controller
                 'currency' => $validated['currency'],
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
                 'notes' => $validated['notes'] ?? null,
-                'status' => $requiresApproval ? 'pending_approval' : 'approved',
+                'status' => $requiredApprovals === 0 ? 'approved' : 'pending_approval',
                 'afip_status' => 'approved',
-                'approvals_required' => $company->required_approvals,
-                'approvals_received' => $requiresApproval ? 0 : $company->required_approvals,
-                'approval_date' => $requiresApproval ? null : now(),
+                'approvals_required' => $requiredApprovals,
+                'approvals_received' => 0,
+                'approval_date' => $requiredApprovals === 0 ? now() : null,
                 'created_by' => auth()->id(),
             ]);
 
