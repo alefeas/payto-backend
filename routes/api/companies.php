@@ -11,6 +11,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/companies/{id}', [CompanyController::class, 'show']);
     Route::put('/companies/{id}', [CompanyController::class, 'update']);
     Route::post('/companies/{id}/regenerate-invite', [CompanyController::class, 'regenerateInvite']);
+    Route::put('/companies/{id}/perception-config', [CompanyController::class, 'updatePerceptionConfig']);
+    Route::put('/companies/{id}/retention-config', [CompanyController::class, 'updateRetentionConfig']);
     Route::delete('/companies/{id}', [CompanyController::class, 'destroy']);
     
     // Company members routes

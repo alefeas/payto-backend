@@ -31,6 +31,10 @@ class Company extends Model
         'afip_key_path',
         'verified_at',
         'required_approvals',
+        'is_perception_agent',
+        'auto_perceptions',
+        'is_retention_agent',
+        'auto_retentions',
     ];
 
     protected $casts = [
@@ -39,6 +43,10 @@ class Company extends Model
         'last_invoice_number' => 'integer',
         'default_sales_point' => 'integer',
         'required_approvals' => 'integer',
+        'is_perception_agent' => 'boolean',
+        'auto_perceptions' => 'array',
+        'is_retention_agent' => 'boolean',
+        'auto_retentions' => 'array',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
         'deleted_at' => 'datetime',

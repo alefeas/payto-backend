@@ -179,22 +179,28 @@ class InvoiceController extends Controller
                 $totalTaxes += $itemTax;
             }
 
+            // Auto-apply perceptions if company is perception agent
+            $perceptionsToApply = $validated['perceptions'] ?? [];
+            if ($company->is_perception_agent && $company->auto_perceptions) {
+                foreach ($company->auto_perceptions as $autoPerception) {
+                    $alreadyAdded = collect($perceptionsToApply)->contains('type', $autoPerception['type']);
+                    if (!$alreadyAdded) {
+                        $perceptionsToApply[] = $autoPerception;
+                    }
+                }
+            }
+
             // Calculate perceptions
             $totalPerceptions = 0;
-            if (isset($validated['perceptions'])) {
-                foreach ($validated['perceptions'] as $perception) {
-                    // Allow fixed amount or calculate from rate
-                    if (isset($perception['amount']) && $perception['amount'] > 0) {
-                        $totalPerceptions += $perception['amount'];
-                    } else {
-                        $baseAmount = $this->calculatePerceptionBase(
-                            $perception['type'],
-                            $perception['base_type'] ?? null,
-                            $subtotal,
-                            $totalTaxes
-                        );
-                        $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
-                    }
+            if (!empty($perceptionsToApply)) {
+                foreach ($perceptionsToApply as $perception) {
+                    $baseAmount = $this->calculatePerceptionBase(
+                        $perception['type'],
+                        $perception['base_type'] ?? null,
+                        $subtotal,
+                        $totalTaxes
+                    );
+                    $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
                 }
             }
 
@@ -246,21 +252,15 @@ class InvoiceController extends Controller
             }
 
             // Create perceptions
-            if (isset($validated['perceptions'])) {
-                foreach ($validated['perceptions'] as $perception) {
-                    // Allow fixed amount or calculate from rate
-                    if (isset($perception['amount']) && $perception['amount'] > 0) {
-                        $amount = $perception['amount'];
-                        $baseAmount = $subtotal; // Default base for display
-                    } else {
-                        $baseAmount = $this->calculatePerceptionBase(
-                            $perception['type'],
-                            $perception['base_type'] ?? null,
-                            $subtotal,
-                            $totalTaxes
-                        );
-                        $amount = $baseAmount * ($perception['rate'] / 100);
-                    }
+            if (!empty($perceptionsToApply)) {
+                foreach ($perceptionsToApply as $perception) {
+                    $baseAmount = $this->calculatePerceptionBase(
+                        $perception['type'],
+                        $perception['base_type'] ?? null,
+                        $subtotal,
+                        $totalTaxes
+                    );
+                    $amount = $baseAmount * ($perception['rate'] / 100);
 
                     $invoice->perceptions()->create([
                         'type' => $perception['type'],

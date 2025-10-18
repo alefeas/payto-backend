@@ -183,6 +183,10 @@ class CompanyService implements CompanyServiceInterface
             'default_sales_point' => $data['default_sales_point'] ?? $company->default_sales_point,
             'last_invoice_number' => $data['last_invoice_number'] ?? $company->last_invoice_number,
             'required_approvals' => $data['required_approvals'] ?? $company->required_approvals,
+            'is_perception_agent' => $data['is_perception_agent'] ?? $company->is_perception_agent,
+            'auto_perceptions' => $data['auto_perceptions'] ?? $company->auto_perceptions,
+            'is_retention_agent' => $data['is_retention_agent'] ?? $company->is_retention_agent,
+            'auto_retentions' => $data['auto_retentions'] ?? $company->auto_retentions,
         ];
 
         if (isset($data['street']) || isset($data['street_number']) || isset($data['postal_code']) || isset($data['province'])) {
@@ -330,6 +334,10 @@ class CompanyService implements CompanyServiceInterface
             'grossIncomeRetention' => $billing?->gross_income_retention ?? 0.42,
             'socialSecurityRetention' => $billing?->social_security_retention ?? 0,
             'requiredApprovals' => $company->required_approvals ?? 1,
+            'isPerceptionAgent' => $company->is_perception_agent ?? false,
+            'autoPerceptions' => $company->auto_perceptions ?? [],
+            'isRetentionAgent' => $company->is_retention_agent ?? false,
+            'autoRetentions' => $company->auto_retentions ?? [],
             'isActive' => $company->is_active,
             'uniqueId' => $company->unique_id,
             'inviteCode' => $company->invite_code,

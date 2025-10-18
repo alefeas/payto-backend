@@ -80,4 +80,38 @@ class CompanyController extends Controller
 
         return $this->success(null, 'Empresa eliminada exitosamente');
     }
+
+    public function updatePerceptionConfig(Request $request, string $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'is_perception_agent' => 'required|boolean',
+            'auto_perceptions' => 'nullable|array',
+            'auto_perceptions.*.type' => 'required|string',
+            'auto_perceptions.*.name' => 'required|string',
+            'auto_perceptions.*.rate' => 'required|numeric|min:0|max:100',
+            'auto_perceptions.*.base_type' => 'required|in:net,total,vat',
+            'auto_perceptions.*.jurisdiction' => 'nullable|string',
+        ]);
+
+        $company = $this->companyService->updateCompany($id, $validated, auth()->id());
+
+        return $this->success($company, 'Configuración de percepciones actualizada exitosamente');
+    }
+
+    public function updateRetentionConfig(Request $request, string $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'is_retention_agent' => 'required|boolean',
+            'auto_retentions' => 'nullable|array',
+            'auto_retentions.*.type' => 'required|string',
+            'auto_retentions.*.name' => 'required|string',
+            'auto_retentions.*.rate' => 'required|numeric|min:0|max:100',
+            'auto_retentions.*.base_type' => 'required|in:net,total,vat',
+            'auto_retentions.*.jurisdiction' => 'nullable|string',
+        ]);
+
+        $company = $this->companyService->updateCompany($id, $validated, auth()->id());
+
+        return $this->success($company, 'Configuración de retenciones actualizada exitosamente');
+    }
 }
