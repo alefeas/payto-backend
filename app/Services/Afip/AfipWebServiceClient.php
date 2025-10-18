@@ -378,4 +378,43 @@ XML;
             'Cuit' => $cuit,
         ];
     }
+
+    /**
+     * Get sales points from AFIP
+     */
+    public function getSalesPoints(): array
+    {
+        $client = $this->getWSFEClient();
+        $auth = $this->getAuthArray();
+        
+        try {
+            $response = $client->FEParamGetPtosVenta(['Auth' => $auth]);
+            
+            if (!isset($response->FEParamGetPtosVentaResult->ResultGet->PtoVenta)) {
+                return [];
+            }
+            
+            $salesPoints = $response->FEParamGetPtosVentaResult->ResultGet->PtoVenta;
+            
+            // Si es un solo punto de venta, convertir a array
+            if (!is_array($salesPoints)) {
+                $salesPoints = [$salesPoints];
+            }
+            
+            return array_map(function($sp) {
+                return [
+                    'point_number' => (int) $sp->Nro,
+                    'description' => isset($sp->Desc) ? (string) $sp->Desc : null,
+                    'blocked' => isset($sp->Bloqueado) ? $sp->Bloqueado === 'S' : false,
+                    'drop_date' => isset($sp->FchBaja) ? (string) $sp->FchBaja : null,
+                ];
+            }, $salesPoints);
+            
+        } catch (\Exception $e) {
+            Log::error('Error getting sales points from AFIP', [
+                'error' => $e->getMessage(),
+            ]);
+            throw new \Exception('Error consultando puntos de venta en AFIP: ' . $e->getMessage());
+        }
+    }
 }

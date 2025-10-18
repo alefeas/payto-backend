@@ -111,6 +111,7 @@ class InvoiceController extends Controller
             'items.*.description' => 'required|string',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
             'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
             'perceptions' => 'nullable|array',
             'perceptions.*.type' => 'required|in:vat_perception,gross_income_perception,social_security_perception',
@@ -164,8 +165,11 @@ class InvoiceController extends Controller
             $totalTaxes = 0;
 
             foreach ($validated['items'] as $item) {
+                $discount = $item['discount_percentage'] ?? 0;
                 $taxRate = $item['tax_rate'] ?? 0;
-                $itemSubtotal = $item['quantity'] * $item['unit_price'];
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * ($discount / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
                 $itemTax = $itemSubtotal * ($taxRate / 100);
                 
                 $subtotal += $itemSubtotal;
@@ -211,14 +215,18 @@ class InvoiceController extends Controller
             ]);
 
             foreach ($validated['items'] as $index => $item) {
+                $discount = $item['discount_percentage'] ?? 0;
                 $taxRate = $item['tax_rate'] ?? 0;
-                $itemSubtotal = $item['quantity'] * $item['unit_price'];
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * ($discount / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
                 $itemTax = $itemSubtotal * ($taxRate / 100);
 
                 $invoice->items()->create([
                     'description' => $item['description'],
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
+                    'discount_percentage' => $discount,
                     'tax_rate' => $taxRate,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,

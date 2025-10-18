@@ -87,4 +87,63 @@ class SalesPointController extends Controller
         
         return response()->json(['message' => 'Punto de venta eliminado']);
     }
+
+    public function syncFromAfip($companyId)
+    {
+        $user = Auth::user();
+        $company = $user->companies()->with('afipCertificate')->findOrFail($companyId);
+        
+        if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+            return response()->json(['error' => 'Certificado AFIP requerido'], 403);
+        }
+        
+        try {
+            $webServiceClient = new \App\Services\Afip\AfipWebServiceClient(
+                $company->afipCertificate,
+                'wsfe'
+            );
+            
+            $afipSalesPoints = $webServiceClient->getSalesPoints();
+            
+            $synced = 0;
+            $created = 0;
+            
+            foreach ($afipSalesPoints as $afipSp) {
+                // Saltar puntos de venta bloqueados o dados de baja
+                if ($afipSp['blocked'] || $afipSp['drop_date']) {
+                    continue;
+                }
+                
+                $existing = CompanySalesPoint::where('company_id', $company->id)
+                    ->where('point_number', $afipSp['point_number'])
+                    ->first();
+                
+                if ($existing) {
+                    $existing->update([
+                        'name' => $afipSp['description'] ?? $existing->name,
+                        'is_active' => true,
+                    ]);
+                    $synced++;
+                } else {
+                    CompanySalesPoint::create([
+                        'company_id' => $company->id,
+                        'point_number' => $afipSp['point_number'],
+                        'name' => $afipSp['description'],
+                        'is_active' => true,
+                    ]);
+                    $created++;
+                }
+            }
+            
+            return response()->json([
+                'message' => 'Sincronización completada',
+                'synced' => $synced,
+                'created' => $created,
+                'total' => count($afipSalesPoints),
+            ]);
+            
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
+    }
 }
