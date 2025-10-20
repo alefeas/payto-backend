@@ -10,6 +10,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/companies/{companyId}/accounts-payable/invoices', [AccountsPayableController::class, 'getInvoices']);
     Route::get('/companies/{companyId}/accounts-payable/suppliers/{supplierId}', [AccountsPayableController::class, 'getSupplierSummary']);
     Route::get('/companies/{companyId}/accounts-payable/default-retentions', [AccountsPayableController::class, 'getDefaultRetentions']);
+    Route::post('/companies/{companyId}/accounts-payable/generate-txt', [AccountsPayableController::class, 'generatePaymentTxt']);
     
     // Supplier Payments
     Route::get('/companies/{companyId}/supplier-payments', [SupplierPaymentController::class, 'index']);

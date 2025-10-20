@@ -361,4 +361,90 @@ class AccountsPayableController extends Controller
             ],
         ]);
     }
+
+    public function generatePaymentTxt(Request $request, string $companyId)
+    {
+        $validated = $request->validate([
+            'invoice_ids' => 'required|array|min:1',
+            'invoice_ids.*' => 'required|uuid|exists:invoices,id',
+        ]);
+
+        $company = Company::findOrFail($companyId);
+        
+        $invoices = Invoice::whereIn('id', $validated['invoice_ids'])
+            ->with(['supplier', 'issuerCompany', 'payments'])
+            ->get();
+        
+        $lines = [];
+        $totalAmount = 0;
+        $recordCount = 0;
+        
+        foreach ($invoices as $invoice) {
+            $supplier = $invoice->supplier ?? $invoice->issuerCompany;
+            
+            if (!$supplier) continue;
+            
+            // Get bank data
+            $cbu = $supplier->bank_cbu ?? '';
+            $accountNumber = $supplier->bank_account_number ?? '';
+            $cuit = $supplier->document_number ?? $supplier->national_id ?? '';
+            $name = $supplier->business_name ?? ($supplier->first_name && $supplier->last_name ? $supplier->first_name . ' ' . $supplier->last_name : $supplier->name ?? '');
+            
+            // Skip if no bank data
+            if (empty($cbu) && empty($accountNumber)) continue;
+            
+            // Calculate pending amount
+            $paidAmount = $invoice->payments->sum('amount');
+            $amount = $invoice->total - $paidAmount;
+            
+            // Normalize text (remove accents and special characters)
+            $name = $this->normalizeText($name);
+            
+            // Standard format for Argentine banks
+            $line = sprintf(
+                "%s;%s;%s;%s;%s;%s",
+                str_replace('-', '', $cuit),
+                $name,
+                $cbu,
+                number_format($amount, 2, '.', ''),
+                $invoice->voucher_number ?? '',
+                'Pago Factura ' . ($invoice->type ?? 'FC') . ' ' . str_pad($invoice->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($invoice->voucher_number ?? 0, 8, '0', STR_PAD_LEFT)
+            );
+            
+            $lines[] = $line;
+            $totalAmount += $amount;
+            $recordCount++;
+        }
+        
+        if (empty($lines)) {
+            return response()->json([
+                'success' => false,
+                'error' => 'No invoices with valid bank data found',
+            ], 400);
+        }
+        
+        // Header
+        array_unshift($lines, "CUIT;RAZON_SOCIAL;CBU;IMPORTE;REFERENCIA;CONCEPTO");
+        
+        // Footer
+        $lines[] = sprintf(
+            "TOTAL;%d registros;%s",
+            $recordCount,
+            number_format($totalAmount, 2, '.', '')
+        );
+        
+        $txtContent = implode("\r\n", $lines);
+        $filename = 'pagos_' . date('Ymd_His') . '.txt';
+        
+        return response($txtContent)
+            ->header('Content-Type', 'text/plain; charset=UTF-8')
+            ->header('Content-Disposition', "attachment; filename=\"{$filename}\"");
+    }
+
+    private function normalizeText(string $text): string
+    {
+        $text = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+        $text = preg_replace('/[^A-Za-z0-9 \-\.\,]/', '', $text);
+        return strtoupper(trim($text));
+    }
 }
