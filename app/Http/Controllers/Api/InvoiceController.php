@@ -356,6 +356,13 @@ class InvoiceController extends Controller
 
         $this->authorize('delete', $invoice);
 
+        // Check if invoice has payments
+        if ($invoice->payments()->exists()) {
+            return response()->json([
+                'message' => 'No se puede eliminar una factura con pagos registrados',
+            ], 422);
+        }
+
         // Only allow deletion of drafts, pending approval, or rejected invoices
         if (in_array($invoice->status, ['issued', 'approved', 'paid'])) {
             return response()->json([
@@ -474,8 +481,7 @@ class InvoiceController extends Controller
         $company = Company::findOrFail($companyId);
 
         $validated = $request->validate([
-            'issuer_cuit' => 'required|string',
-            'issuer_business_name' => 'required|string|max:150',
+            'supplier_id' => 'required|exists:suppliers,id',
             'invoice_type' => 'required|in:A,B,C,E',
             'invoice_number' => 'required|string',
             'issue_date' => 'required|date',
@@ -493,21 +499,9 @@ class InvoiceController extends Controller
         try {
             DB::beginTransaction();
 
-            // Limpiar CUIT
-            $cleanCuit = preg_replace('/[^0-9]/', '', $validated['issuer_cuit']);
-            
-            // Buscar o crear proveedor (no cliente)
-            $supplier = \App\Models\Supplier::firstOrCreate(
-                [
-                    'company_id' => $companyId,
-                    'document_number' => $cleanCuit,
-                ],
-                [
-                    'document_type' => 'CUIT',
-                    'business_name' => $validated['issuer_business_name'],
-                    'tax_condition' => 'registered_taxpayer',
-                ]
-            );
+            // Verify supplier belongs to this company
+            $supplier = \App\Models\Supplier::where('company_id', $companyId)
+                ->findOrFail($validated['supplier_id']);
 
             // Calcular totales
             $subtotal = 0;

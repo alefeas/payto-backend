@@ -12,5 +12,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/connect', [CompanyConnectionController::class, 'store']);
         Route::post('/requests/{connectionId}/accept', [CompanyConnectionController::class, 'accept']);
         Route::post('/requests/{connectionId}/reject', [CompanyConnectionController::class, 'reject']);
+        Route::delete('/{connectionId}', [CompanyConnectionController::class, 'destroy']);
     });
 });

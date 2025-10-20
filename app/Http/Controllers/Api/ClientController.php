@@ -113,9 +113,22 @@ class ClientController extends Controller
 
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
-        // Check if client has invoices
-        if ($client->invoices()->count() > 0) {
-            return $this->error('No se puede eliminar un cliente con facturas existentes', 422);
+        // Check if client has invoices pending approval
+        if ($client->invoices()->where('status', 'pending_approval')->exists()) {
+            return $this->error('No se puede eliminar un cliente con facturas pendientes de aprobación', 422);
+        }
+
+        // Check if client has invoices with pending collections
+        $hasUncollectedInvoices = $client->invoices()
+            ->whereIn('status', ['approved', 'issued'])
+            ->where(function($query) {
+                $query->whereDoesntHave('payments')
+                      ->orWhereRaw('(SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = invoices.id) < total');
+            })
+            ->exists();
+
+        if ($hasUncollectedInvoices) {
+            return $this->error('No se puede eliminar un cliente con facturas pendientes de cobro', 422);
         }
 
         $client->delete();

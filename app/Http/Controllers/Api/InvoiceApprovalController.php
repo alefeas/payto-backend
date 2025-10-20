@@ -69,6 +69,11 @@ class InvoiceApprovalController extends Controller
         $invoice = Invoice::findOrFail($invoiceId);
         $user = auth()->user();
 
+        // Check if invoice has payments
+        if ($invoice->payments()->exists()) {
+            return $this->error('No se puede rechazar una factura con pagos registrados', 422);
+        }
+
         // Update invoice status
         $invoice->update([
             'status' => 'rejected',

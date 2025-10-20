@@ -38,4 +38,7 @@ Route::prefix('v1')->group(function () {
     
     // Analytics routes
     require base_path('routes/api/analytics.php');
+    
+    // Accounts Payable routes
+    require base_path('routes/api/accounts-payable.php');
 });
