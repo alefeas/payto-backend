@@ -120,17 +120,17 @@
     <table class="iva-breakdown">
         <thead>
             <tr>
-                <th style="width: 30%;">Alícuota</th>
-                <th class="text-right" style="width: 35%;">Base Imponible</th>
-                <th class="text-right" style="width: 35%;">IVA</th>
+                <th style="width: 30%; text-align: left;">Alícuota</th>
+                <th style="width: 35%; text-align: right;">Base Imponible</th>
+                <th style="width: 35%; text-align: right;">IVA</th>
             </tr>
         </thead>
         <tbody>
             @foreach($ivaBreakdown as $rate => $amounts)
             <tr>
-                <td>IVA {{ number_format($rate, 2) }}%</td>
-                <td class="text-right">${{ number_format($amounts['base'], 2) }}</td>
-                <td class="text-right">${{ number_format($amounts['tax'], 2) }}</td>
+                <td style="text-align: left;">IVA {{ number_format($rate, 2) }}%</td>
+                <td style="text-align: right;">${{ number_format($amounts['base'], 2) }}</td>
+                <td style="text-align: right;">${{ number_format($amounts['tax'], 2) }}</td>
             </tr>
             @endforeach
         </tbody>
@@ -138,16 +138,26 @@
     @endif
 
     @if($invoice->perceptions && $invoice->perceptions->count() > 0)
-    <div style="border: 1px solid #cbd5e1; padding: 8px; margin-bottom: 10px; background: #fef3c7; font-size: 9px;">
-        <h4 style="margin: 0 0 5px 0; font-size: 10px; color: #92400e;">Percepciones Aplicadas:</h4>
-        @foreach($invoice->perceptions as $perception)
-        <p style="margin: 2px 0;">
-            <strong>{{ $perception->name }}:</strong> 
-            {{ number_format($perception->rate, 2) }}% sobre ${{ number_format($perception->base_amount, 2) }} = 
-            <strong>${{ number_format($perception->amount, 2) }}</strong>
-        </p>
-        @endforeach
-    </div>
+    <table class="iva-breakdown" style="width: 100%; margin-bottom: 10px;">
+        <thead>
+            <tr>
+                <th style="width: 40%; text-align: left;">Percepción</th>
+                <th style="width: 15%; text-align: right;">Alícuota</th>
+                <th style="width: 25%; text-align: right;">Base Imponible</th>
+                <th style="width: 20%; text-align: right;">Importe</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach($invoice->perceptions as $perception)
+            <tr>
+                <td style="text-align: left;">{{ $perception->name }}</td>
+                <td style="text-align: right;">{{ number_format($perception->rate, 2) }}%</td>
+                <td style="text-align: right;">${{ number_format($perception->base_amount, 2) }}</td>
+                <td style="text-align: right;"><strong>${{ number_format($perception->amount, 2) }}</strong></td>
+            </tr>
+            @endforeach
+        </tbody>
+    </table>
     @endif
 
     <div class="totals">

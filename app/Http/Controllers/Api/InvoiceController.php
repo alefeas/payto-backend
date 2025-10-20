@@ -109,8 +109,8 @@ class InvoiceController extends Controller
             'notes' => 'nullable|string',
             'items' => 'required|array|min:1',
             'items.*.description' => 'required|string',
-            'items.*.quantity' => 'required|numeric|min:0.01',
-            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
+            'items.*.unit_price' => 'required|numeric|min:0|max:999999999',
             'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
             'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
             'perceptions' => 'nullable|array',
@@ -120,6 +120,9 @@ class InvoiceController extends Controller
             'perceptions.*.amount' => 'nullable|numeric|min:0',
             'perceptions.*.jurisdiction' => 'nullable|string|max:100',
             'perceptions.*.base_type' => 'nullable|in:net,total,vat',
+        ], [
+            'items.*.quantity.max' => 'La cantidad no puede superar las 999,999 unidades. Si necesitás facturar más, dividí en múltiples ítems.',
+            'items.*.unit_price.max' => 'El precio unitario no puede superar $999,999,999. Si necesitás facturar montos mayores, dividí en múltiples ítems.',
         ]);
 
         try {
@@ -155,20 +158,20 @@ class InvoiceController extends Controller
                     'next_number' => $voucherNumber
                 ]);
             } catch (\Exception $e) {
-                // Si falla AFIP, usar DB como fallback
-                Log::error('Could not get last AFIP number, using local DB', [
+                // NO usar fallback - AFIP debe responder siempre
+                DB::rollBack();
+                
+                Log::error('AFIP query failed - Cannot create invoice', [
+                    'company_id' => $companyId,
+                    'sales_point' => $validated['sales_point'],
                     'error' => $e->getMessage()
                 ]);
                 
-                $lastInvoice = Invoice::where('issuer_company_id', $companyId)
-                    ->where('type', $invoiceType)
-                    ->where('sales_point', $validated['sales_point'])
-                    ->orderBy('voucher_number', 'desc')
-                    ->first();
-                
-                $lastFromDb = $lastInvoice ? $lastInvoice->voucher_number : 0;
-                $lastFromCompany = $company->last_invoice_number ?? 0;
-                $voucherNumber = max($lastFromDb, $lastFromCompany) + 1;
+                return response()->json([
+                    'message' => 'No se pudo consultar AFIP',
+                    'error' => 'Error al obtener el próximo número de comprobante desde AFIP: ' . $e->getMessage(),
+                    'suggestion' => 'Verifica tu conexión y certificado AFIP. Si el problema persiste, contacta soporte.'
+                ], 422);
             }
 
             $subtotal = 0;
@@ -212,6 +215,15 @@ class InvoiceController extends Controller
             }
 
             $total = $subtotal + $totalTaxes + $totalPerceptions;
+            
+            // Validar que el total no sea 0
+            if ($total <= 0) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'No se puede emitir una factura con monto $0',
+                    'error' => 'El total de la factura debe ser mayor a $0. Si aplicaste 100% de descuento, considera emitir una Nota de Crédito en lugar de una factura.',
+                ], 422);
+            }
 
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
@@ -331,6 +343,8 @@ class InvoiceController extends Controller
                 'invoice' => $invoice->load(['client', 'items', 'perceptions']),
             ], 201);
 
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            throw $e;
         } catch (\Exception $e) {
             DB::rollBack();
             
@@ -340,7 +354,7 @@ class InvoiceController extends Controller
             ]);
 
             return response()->json([
-                'message' => 'Failed to create invoice',
+                'message' => 'Error al crear la factura',
                 'error' => $e->getMessage(),
             ], 500);
         }

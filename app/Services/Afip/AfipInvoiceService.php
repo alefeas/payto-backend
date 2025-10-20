@@ -38,13 +38,23 @@ class AfipInvoiceService
                 'CbteTipo' => $invoiceType,
             ]);
 
-            return (int) $response->FECompUltimoAutorizadoResult->CbteNro;
+            $lastNumber = (int) $response->FECompUltimoAutorizadoResult->CbteNro;
+            
+            Log::info('AFIP last authorized invoice', [
+                'sales_point' => $salesPoint,
+                'invoice_type' => $invoiceType,
+                'last_number' => $lastNumber,
+            ]);
+            
+            return $lastNumber;
             
         } catch (\Exception $e) {
-            Log::warning('Could not get last AFIP number, using local DB', [
+            Log::error('Failed to get last AFIP number', [
+                'sales_point' => $salesPoint,
+                'invoice_type' => $invoiceType,
                 'error' => $e->getMessage(),
             ]);
-            return 0;
+            throw new \Exception('No se pudo consultar el último número autorizado en AFIP: ' . $e->getMessage());
         }
     }
 
@@ -111,7 +121,14 @@ class AfipInvoiceService
                     'errors' => $errors,
                 ]);
                 
-                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
+                // Agregar sugerencias para errores comunes
+                $suggestions = $this->getErrorSuggestion($errors[0]->Code ?? null);
+                $errorMsg = 'AFIP rechazó la factura: ' . implode(' | ', $errorMessages);
+                if ($suggestions) {
+                    $errorMsg .= "\n\nSugerencia: " . $suggestions;
+                }
+                
+                throw new \Exception($errorMsg);
             }
 
             $detail = $result->FeDetResp->FECAEDetResponse;
@@ -601,7 +618,7 @@ class AfipInvoiceService
             $taxRate = $item->tax_rate;
             
             // Exento (-1) y No Gravado (-2) no van en AlicIva
-            if ($taxRate == -1 || $taxRate == -2 || $taxRate <= 0) {
+            if ($taxRate == -1 || $taxRate == -2) {
                 continue;
             }
             
@@ -610,7 +627,7 @@ class AfipInvoiceService
             $discount = ($item->discount_percentage ?? 0) / 100;
             $itemSubtotal = $itemBase * (1 - $discount);
             
-            // Obtener ID de AFIP para esta alícuota
+            // Obtener ID de AFIP para esta alícuota (incluye 0%)
             $rateKey = (string)$taxRate;
             $afipId = $afipIvaIds[$rateKey] ?? 5;
             
@@ -738,6 +755,22 @@ class AfipInvoiceService
         }
     }
 
+    /**
+     * Get user-friendly suggestion for common AFIP errors
+     */
+    private function getErrorSuggestion(?int $errorCode): ?string
+    {
+        $suggestions = [
+            501 => 'El monto de la factura excede el límite de tu categoría de Monotributo. Dividí la factura en varios comprobantes o recategorizá en AFIP.',
+            10016 => 'El número o fecha del comprobante no coincide con AFIP. Verificá que estés usando el próximo número disponible.',
+            10018 => 'Falta informar el detalle de IVA. Asegurate de incluir todos los ítems con su alícuota correspondiente.',
+            1501 => 'El CUIT del cliente no es válido o no existe en el padrón de AFIP.',
+            1502 => 'El tipo de comprobante no es compatible con la condición IVA del cliente.',
+        ];
+        
+        return $suggestions[$errorCode] ?? null;
+    }
+    
     /**
      * Test connection to AFIP web services
      */
