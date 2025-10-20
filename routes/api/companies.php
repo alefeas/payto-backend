@@ -46,14 +46,18 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Client routes
     Route::get('/companies/{companyId}/clients', [App\Http\Controllers\Api\ClientController::class, 'index']);
+    Route::get('/companies/{companyId}/clients/trashed', [App\Http\Controllers\Api\ClientController::class, 'trashed']);
     Route::post('/companies/{companyId}/clients', [App\Http\Controllers\Api\ClientController::class, 'store']);
     Route::put('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'update']);
+    Route::post('/companies/{companyId}/clients/{clientId}/restore', [App\Http\Controllers\Api\ClientController::class, 'restore']);
     Route::delete('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'destroy']);
     
     // Supplier routes
     Route::get('/companies/{companyId}/suppliers', [App\Http\Controllers\Api\SupplierController::class, 'index']);
+    Route::get('/companies/{companyId}/suppliers/trashed', [App\Http\Controllers\Api\SupplierController::class, 'trashed']);
     Route::post('/companies/{companyId}/suppliers', [App\Http\Controllers\Api\SupplierController::class, 'store']);
     Route::put('/companies/{companyId}/suppliers/{id}', [App\Http\Controllers\Api\SupplierController::class, 'update']);
+    Route::post('/companies/{companyId}/suppliers/{id}/restore', [App\Http\Controllers\Api\SupplierController::class, 'restore']);
     Route::delete('/companies/{companyId}/suppliers/{id}', [App\Http\Controllers\Api\SupplierController::class, 'destroy']);
     
     // Invoice routes

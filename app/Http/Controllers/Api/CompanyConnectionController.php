@@ -64,6 +64,8 @@ class CompanyConnectionController extends Controller
                 'connectedCompanyId' => $connectedCompany->id,
                 'connectedCompanyName' => $connectedCompany->name,
                 'connectedCompanyUniqueId' => $connectedCompany->unique_id,
+                'connectedCompanyCuit' => $connectedCompany->cuit,
+                'connectedCompanyTaxCondition' => $connectedCompany->tax_condition,
                 'status' => 'connected',
                 'requestedAt' => $connection->created_at,
                 'connectedAt' => $connection->connected_at,
@@ -257,55 +259,92 @@ class CompanyConnectionController extends Controller
 
         $connection = CompanyConnection::findOrFail($connectionId);
 
-        // Verify the company is part of this connection
         if ($connection->company_id !== $companyId && $connection->connected_company_id !== $companyId) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        // Get both company IDs
-        $companyAId = $connection->company_id;
-        $companyBId = $connection->connected_company_id;
-
-        // Check for invoices pending approval
-        $hasPendingApproval = Invoice::where(function($query) use ($companyAId, $companyBId) {
-            $query->where(function($q) use ($companyAId, $companyBId) {
-                $q->where('issuer_company_id', $companyAId)
-                  ->where('receiver_company_id', $companyBId);
-            })->orWhere(function($q) use ($companyAId, $companyBId) {
-                $q->where('issuer_company_id', $companyBId)
-                  ->where('receiver_company_id', $companyAId);
-            });
-        })
-        ->where('status', 'pending_approval')
-        ->exists();
-
-        if ($hasPendingApproval) {
-            return response()->json(['message' => 'No se puede eliminar la conexión porque hay facturas pendientes de aprobación'], 422);
+        DB::beginTransaction();
+        try {
+            // Determinar qué empresa es la "otra"
+            $otherCompanyId = $connection->company_id === $companyId 
+                ? $connection->connected_company_id 
+                : $connection->company_id;
+            
+            $otherCompany = Company::findOrFail($otherCompanyId);
+            
+            // Verificar facturas emitidas (yo -> otra empresa)
+            $invoicesSent = Invoice::where('issuer_company_id', $companyId)
+                ->where('receiver_company_id', $otherCompanyId)
+                ->exists();
+            
+            // Verificar facturas recibidas (otra empresa -> yo)
+            $invoicesReceived = Invoice::where('issuer_company_id', $otherCompanyId)
+                ->where('receiver_company_id', $companyId)
+                ->exists();
+            
+            $created = [];
+            
+            // Si emití facturas, crear Cliente
+            if ($invoicesSent) {
+                $client = $company->clients()->create([
+                    'document_type' => 'CUIT',
+                    'document_number' => $otherCompany->cuit,
+                    'business_name' => $otherCompany->name,
+                    'tax_condition' => $otherCompany->tax_condition,
+                    'email' => null,
+                    'phone' => null,
+                    'address' => null,
+                ]);
+                
+                // Re-vincular facturas emitidas
+                Invoice::where('issuer_company_id', $companyId)
+                    ->where('receiver_company_id', $otherCompanyId)
+                    ->update(['client_id' => $client->id, 'receiver_company_id' => null]);
+                
+                $created[] = 'cliente';
+            }
+            
+            // Si recibí facturas, crear Proveedor
+            if ($invoicesReceived) {
+                $supplier = $company->suppliers()->create([
+                    'document_type' => 'CUIT',
+                    'document_number' => $otherCompany->cuit,
+                    'business_name' => $otherCompany->name,
+                    'tax_condition' => $otherCompany->tax_condition,
+                    'email' => null,
+                    'phone' => null,
+                    'address' => null,
+                ]);
+                
+                // Re-vincular facturas recibidas
+                Invoice::where('issuer_company_id', $otherCompanyId)
+                    ->where('receiver_company_id', $companyId)
+                    ->update(['supplier_id' => $supplier->id, 'issuer_company_id' => null]);
+                
+                $created[] = 'proveedor';
+            }
+            
+            // Eliminar conexión (hard delete)
+            $connection->forceDelete();
+            
+            DB::commit();
+            
+            $message = 'Conexión eliminada correctamente';
+            if (!empty($created)) {
+                $message .= '. Se creó ' . implode(' y ', $created) . ' externo con los datos de la empresa para mantener el historial del Libro IVA.';
+            }
+            
+            return response()->json([
+                'message' => $message,
+                'created' => $created
+            ]);
+            
+        } catch (\Exception $e) {
+            DB::rollBack();
+            \Log::error('Error al eliminar conexión: ' . $e->getMessage());
+            return response()->json(['message' => 'Error al eliminar conexión'], 500);
         }
-
-        // Check for invoices with pending payments/collections
-        $hasUnpaidInvoices = Invoice::where(function($query) use ($companyAId, $companyBId) {
-            $query->where(function($q) use ($companyAId, $companyBId) {
-                $q->where('issuer_company_id', $companyAId)
-                  ->where('receiver_company_id', $companyBId);
-            })->orWhere(function($q) use ($companyAId, $companyBId) {
-                $q->where('issuer_company_id', $companyBId)
-                  ->where('receiver_company_id', $companyAId);
-            });
-        })
-        ->whereIn('status', ['approved', 'issued'])
-        ->where(function($query) {
-            $query->whereDoesntHave('payments')
-                  ->orWhereRaw('(SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = invoices.id) < total');
-        })
-        ->exists();
-
-        if ($hasUnpaidInvoices) {
-            return response()->json(['message' => 'No se puede eliminar la conexión porque hay facturas pendientes de pago o cobro'], 422);
-        }
-
-        $connection->delete();
-
-        return response()->json(['message' => 'Conexión eliminada exitosamente']);
     }
+
+
 }

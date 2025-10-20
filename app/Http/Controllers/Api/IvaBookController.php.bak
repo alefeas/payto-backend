@@ -36,7 +36,6 @@ class IvaBookController extends Controller
         $year = $request->input('year');
 
         // Obtener facturas emitidas del período (incluye NC/ND asociadas)
-        // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->where(function($q) {
                 $q->whereNotNull('client_id') // Facturas con cliente directo
@@ -44,18 +43,8 @@ class IvaBookController extends Controller
             })
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
-            ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
-            ->with([
-                'client' => function($query) {
-                    $query->withTrashed(); // Incluir clientes eliminados
-                },
-                'receiverCompany', // Empresa receptora (puede ser conexión eliminada)
-                'items',
-                'perceptions',
-                'relatedInvoice.client' => function($query) {
-                    $query->withTrashed(); // Incluir clientes eliminados en NC/ND
-                }
-            ])
+            ->whereIn('status', ['issued', 'approved', 'paid', 'partial_paid', 'pending_approval'])
+            ->with(['client', 'items', 'perceptions', 'relatedInvoice.client'])
             ->orderBy('issue_date')
             ->orderBy('voucher_number')
             ->get();
@@ -77,12 +66,9 @@ class IvaBookController extends Controller
         foreach ($invoices as $invoice) {
             // Obtener cliente (directo o de factura relacionada)
             $client = $invoice->client ?? $invoice->relatedInvoice?->client;
-            $clientName = 'CLIENTE ELIMINADO';
-            $clientCuit = '00000000000';
-            
+            $clientName = 'Sin cliente';
             if ($client) {
                 $clientName = $client->business_name ?? trim(($client->first_name ?? '') . ' ' . ($client->last_name ?? '')) ?: 'Sin nombre';
-                $clientCuit = $client->document_number;
             }
             
             // NC resta, ND/Factura suma
@@ -95,7 +81,7 @@ class IvaBookController extends Controller
                 'punto_venta' => str_pad($invoice->sales_point, 4, '0', STR_PAD_LEFT),
                 'numero' => str_pad($invoice->voucher_number, 8, '0', STR_PAD_LEFT),
                 'cliente' => $clientName,
-                'cuit' => $clientCuit,
+                'cuit' => $client ? $client->document_number : '00000000000',
                 'neto_gravado' => 0,
                 'iva_21' => 0,
                 'iva_105' => 0,
@@ -166,8 +152,6 @@ class IvaBookController extends Controller
             }
         }
         
-        $debitoFiscal = $totals['iva_21'] + $totals['iva_105'] + $totals['iva_27'] + $totals['iva_25'] + $totals['iva_5'];
-        
         return $this->success([
             'period' => [
                 'month' => $month,
@@ -176,7 +160,7 @@ class IvaBookController extends Controller
             ],
             'records' => $records,
             'totals' => $totals,
-            'debito_fiscal' => $debitoFiscal,
+            'debito_fiscal' => $totals['iva_21'] + $totals['iva_105'] + $totals['iva_27'] + $totals['iva_25'] + $totals['iva_5'],
             'warnings' => $warnings,
         ]);
     }
@@ -201,20 +185,12 @@ class IvaBookController extends Controller
         $year = $request->input('year');
 
         // Obtener facturas recibidas del período (identificadas por supplier_id)
-        // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
         $invoices = Invoice::where('receiver_company_id', $companyId)
             ->whereNotNull('supplier_id') // Solo facturas de proveedores externos
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
-            ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
-            ->with([
-                'supplier' => function($query) {
-                    $query->withTrashed(); // Incluir proveedores eliminados
-                },
-                'issuerCompany', // Empresa emisora (puede ser conexión eliminada)
-                'items',
-                'perceptions'
-            ])
+            ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo canceladas y archivadas
+            ->with(['supplier', 'items', 'perceptions'])
             ->orderBy('issue_date')
             ->orderBy('voucher_number')
             ->get();
@@ -244,12 +220,9 @@ class IvaBookController extends Controller
                 })
                 ->sum('amount');
 
-            $supplierName = 'PROVEEDOR ELIMINADO';
-            $supplierCuit = '00000000000';
-            
+            $supplierName = 'Sin proveedor';
             if ($invoice->supplier) {
                 $supplierName = $invoice->supplier->business_name ?? trim(($invoice->supplier->first_name ?? '') . ' ' . ($invoice->supplier->last_name ?? '')) ?: 'Sin nombre';
-                $supplierCuit = $invoice->supplier->document_number;
             }
             
             // En COMPRAS: NC suma (te devuelven IVA), ND resta (te cobran más IVA)
@@ -262,7 +235,7 @@ class IvaBookController extends Controller
                 'punto_venta' => str_pad($invoice->sales_point, 4, '0', STR_PAD_LEFT),
                 'numero' => str_pad($invoice->voucher_number, 8, '0', STR_PAD_LEFT),
                 'proveedor' => $supplierName,
-                'cuit' => $supplierCuit,
+                'cuit' => $invoice->supplier ? $invoice->supplier->document_number : '00000000000',
                 'neto_gravado' => 0,
                 'iva_21' => 0,
                 'iva_105' => 0,
@@ -329,8 +302,6 @@ class IvaBookController extends Controller
             }
         }
         
-        $creditoFiscal = $totals['iva_21'] + $totals['iva_105'] + $totals['iva_27'] + $totals['iva_25'] + $totals['iva_5'];
-        
         return $this->success([
             'period' => [
                 'month' => $month,
@@ -339,7 +310,7 @@ class IvaBookController extends Controller
             ],
             'records' => $records,
             'totals' => $totals,
-            'credito_fiscal' => $creditoFiscal,
+            'credito_fiscal' => $totals['iva_21'] + $totals['iva_105'] + $totals['iva_27'] + $totals['iva_25'] + $totals['iva_5'],
             'warnings' => $warnings,
         ]);
     }
@@ -399,24 +370,22 @@ class IvaBookController extends Controller
         $invalidCuits = [];
         foreach ($salesBook->data->records as $record) {
             $record = (array)$record;
-            // Ignorar CUIT por defecto (sin cliente)
-            if ($record['cuit'] !== '00000000000' && !CuitValidatorService::isValid($record['cuit'])) {
+            if (!CuitValidatorService::isValid($record['cuit'])) {
                 $invalidCuits[] = $record['cuit'] . ' (' . $record['cliente'] . ')';
             }
         }
         
         if (count($invalidCuits) > 0) {
-            $invalidList = implode(', ', array_slice($invalidCuits, 0, 5)) . 
-                          (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
+            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . 
+                       implode(', ', array_slice($invalidCuits, 0, 5)) . 
+                       (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
             
             if (!$request->has('force')) {
                 return $this->error(
-                    'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. AFIP rechazará este archivo.',
+                    $message . '. AFIP rechazará este archivo. Corrija los CUITs o agregue ?force=1 para exportar de todas formas.',
                     422
                 );
             }
-            
-            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList;
             
             \Log::warning('Libro IVA Ventas exportado con CUITs inválidos', [
                 'company_id' => $companyId,
@@ -455,24 +424,22 @@ class IvaBookController extends Controller
         $invalidCuits = [];
         foreach ($purchasesBook->data->records as $record) {
             $record = (array)$record;
-            // Ignorar CUIT por defecto (sin proveedor)
-            if ($record['cuit'] !== '00000000000' && !CuitValidatorService::isValid($record['cuit'])) {
+            if (!CuitValidatorService::isValid($record['cuit'])) {
                 $invalidCuits[] = $record['cuit'] . ' (' . $record['proveedor'] . ')';
             }
         }
         
         if (count($invalidCuits) > 0) {
-            $invalidList = implode(', ', array_slice($invalidCuits, 0, 5)) . 
-                          (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
+            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . 
+                       implode(', ', array_slice($invalidCuits, 0, 5)) . 
+                       (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
             
             if (!$request->has('force')) {
                 return $this->error(
-                    'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. AFIP rechazará este archivo.',
+                    $message . '. AFIP rechazará este archivo. Corrija los CUITs o agregue ?force=1 para exportar de todas formas.',
                     422
                 );
             }
-            
-            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList;
             
             \Log::warning('Libro IVA Compras exportado con CUITs inválidos', [
                 'company_id' => $companyId,

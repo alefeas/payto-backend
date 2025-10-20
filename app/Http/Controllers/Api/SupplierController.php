@@ -20,13 +20,37 @@ class SupplierController extends Controller
         return response()->json($suppliers);
     }
 
+    public function trashed($companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [Supplier::class, $company]);
+        $suppliers = Supplier::where('company_id', $companyId)
+            ->onlyTrashed()
+            ->orderBy('deleted_at', 'desc')
+            ->get();
+        return response()->json($suppliers);
+    }
+
+    public function restore($companyId, $id)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('update', [Supplier::class, $company]);
+        
+        $supplier = Supplier::where('company_id', $companyId)
+            ->onlyTrashed()
+            ->findOrFail($id);
+        
+        $supplier->restore();
+        return response()->json(['message' => 'Proveedor restaurado correctamente', 'supplier' => $supplier]);
+    }
+
     public function store(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('create', [Supplier::class, $company]);
         $validated = $request->validate([
             'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => 'required|string|max:20',
+            'document_number' => ['required', 'string', 'max:20', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string|max:100',
             'first_name' => 'nullable|string|max:50',
             'last_name' => 'nullable|string|max:50',
@@ -45,12 +69,19 @@ class SupplierController extends Controller
             return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
         }
 
-        $exists = Supplier::where('company_id', $companyId)
+        // Check for duplicate (including soft deleted)
+        $existing = Supplier::where('company_id', $companyId)
             ->where('document_number', $validated['document_number'])
-            ->exists();
+            ->withTrashed()
+            ->first();
 
-        if ($exists) {
-            return response()->json(['message' => 'El proveedor ya existe'], 409);
+        if ($existing) {
+            if ($existing->trashed()) {
+                return response()->json([
+                    'message' => 'Ya existe un proveedor eliminado con este CUIT. Restaura el proveedor existente desde la sección "Proveedores eliminados" para editarlo.'
+                ], 422);
+            }
+            return response()->json(['message' => 'Ya existe un proveedor con este CUIT'], 422);
         }
 
         $supplier = Supplier::create([...$validated, 'company_id' => $companyId]);
@@ -66,7 +97,7 @@ class SupplierController extends Controller
 
         $validated = $request->validate([
             'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => 'required|string|max:20',
+            'document_number' => ['required', 'string', 'max:20', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string|max:100',
             'first_name' => 'nullable|string|max:50',
             'last_name' => 'nullable|string|max:50',
@@ -87,6 +118,24 @@ class SupplierController extends Controller
             return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
         }
 
+        // Check for duplicate if document_number is being changed (including soft deleted)
+        if (isset($validated['document_number']) && $validated['document_number'] !== $supplier->document_number) {
+            $existing = Supplier::where('company_id', $companyId)
+                ->where('document_number', $validated['document_number'])
+                ->where('id', '!=', $id)
+                ->withTrashed()
+                ->first();
+
+            if ($existing) {
+                if ($existing->trashed()) {
+                    return response()->json([
+                        'message' => 'Ya existe un proveedor eliminado con este CUIT. No puedes usar un CUIT duplicado.'
+                    ], 422);
+                }
+                return response()->json(['message' => 'Ya existe un proveedor con este CUIT'], 422);
+            }
+        }
+
         $supplier->update($validated);
         return response()->json($supplier);
     }
@@ -98,25 +147,9 @@ class SupplierController extends Controller
 
         $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
         
-        // Check if supplier has invoices pending approval
-        if ($supplier->invoices()->where('status', 'pending_approval')->exists()) {
-            return response()->json(['message' => 'No se puede eliminar un proveedor con facturas pendientes de aprobación'], 422);
-        }
-        
-        // Check if supplier has invoices with pending payments
-        $hasUnpaidInvoices = $supplier->invoices()
-            ->whereIn('status', ['approved', 'issued'])
-            ->where(function($query) {
-                $query->whereDoesntHave('payments')
-                      ->orWhereRaw('(SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = invoices.id) < total');
-            })
-            ->exists();
-        
-        if ($hasUnpaidInvoices) {
-            return response()->json(['message' => 'No se puede eliminar un proveedor con facturas pendientes de pago'], 422);
-        }
-        
+        // SoftDelete: El proveedor se marca como eliminado pero los datos persisten
+        // El Libro IVA puede seguir accediendo con withTrashed()
         $supplier->delete();
-        return response()->json(null, 204);
+        return response()->json(['message' => 'Proveedor eliminado correctamente'], 200);
     }
 }

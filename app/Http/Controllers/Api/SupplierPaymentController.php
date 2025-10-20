@@ -113,7 +113,8 @@ class SupplierPaymentController extends Controller
     public function index(Request $request, string $companyId)
     {
         $query = Payment::where('company_id', $companyId)
-            ->with(['invoice.issuerCompany', 'invoice.supplier', 'retentions', 'registeredBy']);
+            ->with(['invoice.issuerCompany', 'invoice.supplier', 'retentions', 'registeredBy'])
+            ->whereHas('invoice');
         
         if ($request->has('status')) {
             $query->where('status', $request->status);
@@ -131,7 +132,7 @@ class SupplierPaymentController extends Controller
         
         return response()->json([
             'success' => true,
-            'data' => $payments->map(function($payment) {
+            'data' => $payments->filter(fn($p) => $p->invoice)->map(function($payment) {
                 $supplier = $payment->invoice->supplier ?? $payment->invoice->issuerCompany;
                 $supplierName = 'Proveedor desconocido';
                 
@@ -177,7 +178,7 @@ class SupplierPaymentController extends Controller
                     'status' => $payment->status,
                     'registered_by' => $payment->registeredBy->name ?? null,
                 ];
-            }),
+            })->values(),
             'pagination' => [
                 'current_page' => 1,
                 'last_page' => 1,

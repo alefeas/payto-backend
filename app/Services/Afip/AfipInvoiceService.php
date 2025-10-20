@@ -121,14 +121,7 @@ class AfipInvoiceService
                     'errors' => $errors,
                 ]);
                 
-                // Agregar sugerencias para errores comunes
-                $suggestions = $this->getErrorSuggestion($errors[0]->Code ?? null);
-                $errorMsg = 'AFIP rechazó la factura: ' . implode(' | ', $errorMessages);
-                if ($suggestions) {
-                    $errorMsg .= "\n\nSugerencia: " . $suggestions;
-                }
-                
-                throw new \Exception($errorMsg);
+                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
             }
 
             $detail = $result->FeDetResp->FECAEDetResponse;
@@ -259,16 +252,23 @@ class AfipInvoiceService
      */
     private function buildInvoiceData(Invoice $invoice): array
     {
-        $condicionIva = $this->getAfipCondicionIva($invoice->client);
+        // Obtener el receptor: puede ser un cliente externo o una empresa conectada
+        $receptor = $invoice->client ?? $invoice->receiverCompany;
+        
+        if (!$receptor) {
+            throw new \Exception('La factura debe tener un cliente o empresa receptora');
+        }
+        
+        $condicionIva = $this->getAfipCondicionIva($receptor);
         $invoiceType = $this->getAfipInvoiceType($invoice->type);
         
         // Validar condición IVA del EMISOR (crítico)
         $this->validateIssuerTaxCondition($invoiceType);
         
         // Validar compatibilidad tipo de comprobante con condición IVA del RECEPTOR
-        $this->validateInvoiceTypeCompatibility($invoiceType, $condicionIva, $invoice->client);
+        $this->validateInvoiceTypeCompatibility($invoiceType, $condicionIva, $receptor);
         
-        $docType = $this->getAfipDocType($invoice->client);
+        $docType = $this->getAfipDocType($receptor);
         $concept = $invoice->concept === 'services' ? 2 : ($invoice->concept === 'products_and_services' ? 3 : 1);
 
         // Validar fecha según concepto (AFIP error 10016)
@@ -298,7 +298,28 @@ class AfipInvoiceService
         // Factura C: IVA incluido, no se discrimina
         $isTipoC = in_array($invoiceType, [11, 13, 12, 15]); // Factura C, NC C, ND C, Recibo C
         
-        $docNro = $this->cleanDocumentNumber($invoice->client->document_number);
+        $docNro = $this->cleanDocumentNumber($receptor->document_number ?? $receptor->cuit ?? '0');
+        
+        // Validar CUIT para Facturas A y M (AFIP exige DocTipo=80 y CUIT válido)
+        $tiposAyM = [1, 2, 3, 4, 5, 39, 40, 51, 52, 53, 60, 61, 63, 64, 201, 202, 203, 206, 207, 208, 211, 212, 213];
+        if (in_array($invoiceType, $tiposAyM)) {
+            if (empty($docNro) || strlen($docNro) != 11) {
+                $clientName = $receptor->business_name ?? $receptor->name ?? 'el cliente';
+                throw new \Exception(
+                    "No se puede emitir este comprobante sin un CUIT válido. "
+                    . "{$clientName} debe tener un CUIT de 11 dígitos."
+                );
+            }
+            if (!\App\Services\CuitValidatorService::isValid($docNro)) {
+                $clientName = $receptor->business_name ?? $receptor->name ?? 'el cliente';
+                $formatted = \App\Services\CuitValidatorService::format($docNro);
+                $fixed = \App\Services\CuitValidatorService::fix($docNro);
+                throw new \Exception(
+                    "El CUIT de {$clientName} ({$formatted}) no es válido. "
+                    . "El CUIT correcto debería ser: {$fixed}"
+                );
+            }
+        }
         
         // Para consumidores finales sin CUIT, usar DocNro = 0
         if ($condicionIva == 5 && (empty($docNro) || strlen($docNro) != 11)) {
@@ -477,6 +498,13 @@ class AfipInvoiceService
             6 => 'Monotributo'
         ];
         
+        Log::info('Validating invoice type compatibility', [
+            'invoice_type' => $invoiceType,
+            'condicion_iva' => $condicionIva,
+            'client_type' => get_class($client),
+            'client_id' => $client->id ?? 'unknown',
+        ]);
+        
         // Facturas/NC/ND tipo A solo para Responsables Inscriptos
         $tiposA = [1, 2, 3];
         if (in_array($invoiceType, $tiposA) && $condicionIva != 1) {
@@ -542,14 +570,23 @@ class AfipInvoiceService
             return 5; // Default: Consumidor Final
         }
         
-        // Intentar obtener tax_condition de diferentes formas
-        $taxCondition = $client->tax_condition ?? $client->taxCondition ?? null;
+        // Si es una empresa (Company), obtener su tax_condition directamente
+        if ($client instanceof \App\Models\Company) {
+            $taxCondition = $client->tax_condition;
+            Log::info('Getting AFIP Condicion IVA from Company', [
+                'company_id' => $client->id,
+                'tax_condition' => $taxCondition,
+            ]);
+        } else {
+            // Intentar obtener tax_condition de diferentes formas (Client/Supplier)
+            $taxCondition = $client->tax_condition ?? $client->taxCondition ?? null;
+        }
         
-        Log::info('Getting AFIP Condicion IVA', [
-            'client_id' => $client->id ?? 'unknown',
-            'tax_condition_raw' => $taxCondition,
-            'document_type' => $client->document_type ?? 'NOT SET',
-        ]);
+            Log::info('Getting AFIP Condicion IVA', [
+                'client_id' => $client->id ?? 'unknown',
+                'tax_condition_raw' => $taxCondition,
+                'document_type' => $client->document_type ?? 'NOT SET',
+            ]);
         
         // Si no tiene tax_condition, inferir del tipo de documento
         if (!$taxCondition) {
@@ -755,22 +792,7 @@ class AfipInvoiceService
         }
     }
 
-    /**
-     * Get user-friendly suggestion for common AFIP errors
-     */
-    private function getErrorSuggestion(?int $errorCode): ?string
-    {
-        $suggestions = [
-            501 => 'El monto de la factura excede el límite de tu categoría de Monotributo. Dividí la factura en varios comprobantes o recategorizá en AFIP.',
-            10016 => 'El número o fecha del comprobante no coincide con AFIP. Verificá que estés usando el próximo número disponible.',
-            10018 => 'Falta informar el detalle de IVA. Asegurate de incluir todos los ítems con su alícuota correspondiente.',
-            1501 => 'El CUIT del cliente no es válido o no existe en el padrón de AFIP.',
-            1502 => 'El tipo de comprobante no es compatible con la condición IVA del cliente.',
-        ];
-        
-        return $suggestions[$errorCode] ?? null;
-    }
-    
+
     /**
      * Test connection to AFIP web services
      */

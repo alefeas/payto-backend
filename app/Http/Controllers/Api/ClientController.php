@@ -26,6 +26,33 @@ class ClientController extends Controller
         return $this->success($clients);
     }
 
+    public function trashed(string $companyId): JsonResponse
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [Client::class, $company]);
+
+        $clients = Client::where('company_id', $companyId)
+            ->onlyTrashed()
+            ->orderBy('deleted_at', 'desc')
+            ->get();
+
+        return $this->success($clients);
+    }
+
+    public function restore(string $companyId, string $clientId): JsonResponse
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('update', [Client::class, $company]);
+
+        $client = Client::where('company_id', $companyId)
+            ->onlyTrashed()
+            ->findOrFail($clientId);
+
+        $client->restore();
+
+        return $this->success($client, 'Cliente restaurado correctamente');
+    }
+
     public function store(Request $request, string $companyId): JsonResponse
     {
         $company = Company::findOrFail($companyId);
@@ -33,7 +60,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => 'required|string',
+            'document_number' => ['required', 'string', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string',
             'first_name' => 'nullable|string',
             'last_name' => 'nullable|string',
@@ -47,13 +74,20 @@ class ClientController extends Controller
             return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
         }
 
-        // Check for duplicate
+        // Check for duplicate (including soft deleted)
         $existing = Client::where('company_id', $companyId)
             ->where('document_number', $validated['document_number'])
+            ->withTrashed()
             ->first();
 
         if ($existing) {
-            return $this->error('Ya existe un cliente con este número de documento', 422);
+            if ($existing->trashed()) {
+                return $this->error(
+                    'Ya existe un cliente eliminado con este CUIT. Restaura el cliente existente desde la sección "Clientes eliminados" para editarlo.',
+                    422
+                );
+            }
+            return $this->error('Ya existe un cliente con este CUIT', 422);
         }
 
         $client = Client::create([
@@ -73,7 +107,7 @@ class ClientController extends Controller
 
         $validated = $request->validate([
             'document_type' => 'sometimes|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => 'sometimes|string',
+            'document_number' => ['sometimes', 'string', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string',
             'first_name' => 'nullable|string',
             'last_name' => 'nullable|string',
@@ -89,15 +123,22 @@ class ClientController extends Controller
             return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
         }
 
-        // Check for duplicate if document_number is being changed
+        // Check for duplicate if document_number is being changed (including soft deleted)
         if (isset($validated['document_number']) && $validated['document_number'] !== $client->document_number) {
             $existing = Client::where('company_id', $companyId)
                 ->where('document_number', $validated['document_number'])
                 ->where('id', '!=', $clientId)
+                ->withTrashed()
                 ->first();
 
             if ($existing) {
-                return $this->error('Ya existe un cliente con este número de documento', 422);
+                if ($existing->trashed()) {
+                    return $this->error(
+                        'Ya existe un cliente eliminado con este CUIT. No puedes usar un CUIT duplicado.',
+                        422
+                    );
+                }
+                return $this->error('Ya existe un cliente con este CUIT', 422);
             }
         }
 
@@ -113,26 +154,10 @@ class ClientController extends Controller
 
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
-        // Check if client has invoices pending approval
-        if ($client->invoices()->where('status', 'pending_approval')->exists()) {
-            return $this->error('No se puede eliminar un cliente con facturas pendientes de aprobación', 422);
-        }
-
-        // Check if client has invoices with pending collections
-        $hasUncollectedInvoices = $client->invoices()
-            ->whereIn('status', ['approved', 'issued'])
-            ->where(function($query) {
-                $query->whereDoesntHave('payments')
-                      ->orWhereRaw('(SELECT COALESCE(SUM(amount), 0) FROM invoice_payments WHERE invoice_id = invoices.id) < total');
-            })
-            ->exists();
-
-        if ($hasUncollectedInvoices) {
-            return $this->error('No se puede eliminar un cliente con facturas pendientes de cobro', 422);
-        }
-
+        // SoftDelete: El cliente se marca como eliminado pero los datos persisten
+        // El Libro IVA puede seguir accediendo con withTrashed()
         $client->delete();
 
-        return $this->success(null, 'Client deleted successfully');
+        return $this->success(null, 'Cliente eliminado correctamente');
     }
 }
