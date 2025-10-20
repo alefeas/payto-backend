@@ -32,6 +32,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/companies/{companyId}/afip/update-tax-condition', [App\Http\Controllers\Api\AfipCertificateController::class, 'updateTaxCondition']);
     Route::delete('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'destroy']);
     
+    // AFIP Padron routes
+    Route::get('/companies/{companyId}/afip/fiscal-data', [App\Http\Controllers\Api\AfipPadronController::class, 'getOwnFiscalData']);
+    Route::post('/companies/{companyId}/afip/search-cuit', [App\Http\Controllers\Api\AfipPadronController::class, 'searchByCuit']);
+    
     // Sales points routes
     Route::get('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'index']);
     Route::post('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'store']);

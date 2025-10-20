@@ -10,18 +10,18 @@ class CompanyConnectionPolicy
     public function viewAny(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant', 'operator']);
+        return $member && in_array($member->role, ['owner', 'administrator', 'financial_director', 'accountant', 'operator']);
     }
 
     public function create(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'financial_director', 'accountant', 'operator']);
+        return $member && in_array($member->role, ['owner', 'administrator', 'financial_director', 'accountant', 'operator']);
     }
 
     public function manage(User $user, Company $company): bool
     {
         $member = $company->members()->where('user_id', $user->id)->first();
-        return $member && in_array($member->role, ['owner', 'admin', 'financial_director']);
+        return $member && in_array($member->role, ['owner', 'administrator', 'financial_director']);
     }
 }
