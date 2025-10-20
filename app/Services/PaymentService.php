@@ -20,7 +20,7 @@ class PaymentService
                 throw new \Exception('Invoice does not belong to this company');
             }
             
-            // Crear pago
+            // Crear pago confirmado directamente
             $payment = Payment::create([
                 'company_id' => $company->id,
                 'invoice_id' => $invoice->id,
@@ -29,16 +29,13 @@ class PaymentService
                 'payment_method' => $data['payment_method'],
                 'reference_number' => $data['reference_number'] ?? null,
                 'notes' => $data['notes'] ?? null,
-                'status' => 'pending',
+                'status' => 'confirmed',
                 'registered_by' => auth()->id(),
+                'confirmed_by' => auth()->id(),
+                'confirmed_at' => now(),
             ]);
             
-            // Aplicar retenciones automáticas si la empresa es agente
-            if ($company->is_retention_agent && !empty($company->auto_retentions)) {
-                $this->applyAutoRetentions($payment, $company, $invoice);
-            }
-            
-            // Aplicar retenciones manuales si se proporcionaron
+            // Aplicar retenciones manuales si se proporcionaron, sino aplicar automáticas
             if (!empty($data['retentions'])) {
                 foreach ($data['retentions'] as $retention) {
                     PaymentRetention::create([
@@ -51,6 +48,8 @@ class PaymentService
                         'certificate_number' => $retention['certificate_number'] ?? null,
                     ]);
                 }
+            } elseif ($company->is_retention_agent && !empty($company->auto_retentions)) {
+                $this->applyAutoRetentions($payment, $company, $invoice);
             }
             
             // Actualizar estado de factura a paid si el pago cubre el total

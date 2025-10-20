@@ -40,6 +40,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'index']);
     Route::post('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'store']);
     Route::post('/companies/{companyId}/sales-points/sync-from-afip', [App\Http\Controllers\Api\SalesPointController::class, 'syncFromAfip']);
+    Route::post('/companies/{companyId}/sales-points/{salesPoint}/reset-vouchers', [App\Http\Controllers\Api\SalesPointController::class, 'resetVouchers']);
     Route::put('/companies/{companyId}/sales-points/{salesPointId}', [App\Http\Controllers\Api\SalesPointController::class, 'update']);
     Route::delete('/companies/{companyId}/sales-points/{salesPointId}', [App\Http\Controllers\Api\SalesPointController::class, 'destroy']);
     

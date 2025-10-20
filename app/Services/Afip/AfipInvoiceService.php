@@ -86,36 +86,13 @@ class AfipInvoiceService
             
             $invoiceType = $this->getAfipInvoiceType($invoice->type);
             
-            // Consultar último número autorizado justo antes de enviar
-            $lastAuthorized = $this->getLastAuthorizedInvoice($invoice->sales_point, $invoiceType);
-            $expectedNumber = $lastAuthorized + 1;
-            
-            // Si el número no coincide, actualizar
-            if ($invoice->voucher_number != $expectedNumber) {
-                Log::warning('Voucher number mismatch, correcting', [
-                    'invoice_id' => $invoice->id,
-                    'current' => $invoice->voucher_number,
-                    'expected' => $expectedNumber,
-                    'last_authorized' => $lastAuthorized,
-                ]);
-                
-                $invoice->update([
-                    'voucher_number' => $expectedNumber,
-                    'number' => sprintf('%04d-%08d', $invoice->sales_point, $expectedNumber)
-                ]);
-            }
-            
             $invoiceData = $this->buildInvoiceData($invoice);
             
             Log::info('Sending invoice to AFIP', [
                 'invoice_id' => $invoice->id,
                 'voucher_number' => $invoice->voucher_number,
                 'invoice_type' => $invoiceType,
-                'client_id' => $invoice->client_id,
-                'client_exists' => $invoice->client ? 'YES' : 'NO',
-                'client_tax_condition' => $invoice->client->tax_condition ?? 'NOT SET',
-                'condicion_iva_receptor_id' => $invoiceData['FeDetReq']['FECAEDetRequest']['CondicionIVAReceptorId'] ?? 'NOT SET',
-                'full_request' => json_encode($invoiceData),
+                'sales_point' => $invoice->sales_point,
             ]);
 
             $response = $soapClient->FECAESolicitar([

@@ -186,18 +186,23 @@ class AnalyticsController extends Controller
     public function getPendingInvoices($companyId)
     {
         try {
-            // Facturas a cobrar (emitidas por mi, no pagadas)
+            // Badge "Cuentas por Cobrar": Facturas emitidas por mí (issuer) que están issued o approved
+            // Son facturas que emití a clientes y aún no están pagadas
             $toCollect = Invoice::where('issuer_company_id', $companyId)
                 ->whereIn('status', ['issued', 'approved'])
                 ->count();
 
-            // Facturas a pagar (recibidas, aprobadas pero no pagadas)
+            // Badge "Cuentas por Pagar": Facturas recibidas (receiver) de proveedores externos (supplier_id) aprobadas
+            // Son facturas de proveedores que ya aprobé pero aún no pagué
             $toPay = Invoice::where('receiver_company_id', $companyId)
+                ->whereNotNull('supplier_id')
                 ->where('status', 'approved')
                 ->count();
 
-            // Facturas pendientes de aprobar (simplemente contar las que tienen ese estado)
+            // Badge "Aprobar Facturas": Facturas recibidas (receiver) de proveedores externos (supplier_id) pending_approval
+            // Son facturas de proveedores que aún no aprobé
             $pendingApprovals = Invoice::where('receiver_company_id', $companyId)
+                ->whereNotNull('supplier_id')
                 ->where('status', 'pending_approval')
                 ->count();
 

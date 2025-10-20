@@ -113,7 +113,7 @@ class SupplierPaymentController extends Controller
     public function index(Request $request, string $companyId)
     {
         $query = Payment::where('company_id', $companyId)
-            ->with(['invoice.issuerCompany', 'retentions', 'registeredBy']);
+            ->with(['invoice.issuerCompany', 'invoice.supplier', 'retentions', 'registeredBy']);
         
         if ($request->has('status')) {
             $query->where('status', $request->status);
@@ -127,18 +127,40 @@ class SupplierPaymentController extends Controller
             $query->where('payment_date', '<=', $request->to_date);
         }
         
-        $payments = $query->orderByDesc('payment_date')->paginate(20);
+        $payments = $query->orderByDesc('payment_date')->get();
         
         return response()->json([
             'success' => true,
             'data' => $payments->map(function($payment) {
+                $supplier = $payment->invoice->supplier ?? $payment->invoice->issuerCompany;
+                $supplierName = 'Proveedor desconocido';
+                
+                if ($supplier) {
+                    $supplierName = $supplier->business_name ?? 
+                                   ($supplier->first_name && $supplier->last_name 
+                                       ? $supplier->first_name . ' ' . $supplier->last_name 
+                                       : $supplier->name ?? 'Sin nombre');
+                }
+                
                 return [
                     'id' => $payment->id,
                     'invoice_id' => $payment->invoice_id,
+                    'invoice' => [
+                        'id' => $payment->invoice->id,
+                        'type' => $payment->invoice->type,
+                        'sales_point' => $payment->invoice->sales_point,
+                        'voucher_number' => $payment->invoice->voucher_number,
+                        'supplier' => [
+                            'business_name' => $supplierName,
+                        ],
+                        'issuerCompany' => $payment->invoice->issuerCompany ? [
+                            'business_name' => $payment->invoice->issuerCompany->business_name ?? $payment->invoice->issuerCompany->name,
+                        ] : null,
+                    ],
                     'voucher_number' => $payment->invoice->voucher_number,
                     'supplier' => [
-                        'id' => $payment->invoice->issuerCompany->id,
-                        'name' => $payment->invoice->issuerCompany->business_name ?? $payment->invoice->issuerCompany->name,
+                        'id' => $supplier->id ?? null,
+                        'name' => $supplierName,
                     ],
                     'amount' => $payment->amount,
                     'retentions' => $payment->retentions->map(fn($r) => [
@@ -151,15 +173,16 @@ class SupplierPaymentController extends Controller
                     'payment_date' => $payment->payment_date,
                     'payment_method' => $payment->payment_method,
                     'reference_number' => $payment->reference_number,
+                    'notes' => $payment->notes,
                     'status' => $payment->status,
                     'registered_by' => $payment->registeredBy->name ?? null,
                 ];
             }),
             'pagination' => [
-                'current_page' => $payments->currentPage(),
-                'last_page' => $payments->lastPage(),
-                'per_page' => $payments->perPage(),
-                'total' => $payments->total(),
+                'current_page' => 1,
+                'last_page' => 1,
+                'per_page' => $payments->count(),
+                'total' => $payments->count(),
             ],
         ]);
     }
