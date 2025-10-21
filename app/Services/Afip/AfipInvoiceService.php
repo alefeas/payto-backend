@@ -347,6 +347,16 @@ class AfipInvoiceService
             $impNeto = $invoice->subtotal;
         }
         
+        $monId = $this->mapSystemCurrencyToAfip($invoice->currency ?? 'ARS');
+        $monCotiz = ($invoice->currency ?? 'ARS') === 'ARS' ? 1 : ($invoice->exchange_rate ?? 1);
+        
+        Log::info('Currency data for AFIP', [
+            'invoice_id' => $invoice->id,
+            'invoice_currency' => $invoice->currency,
+            'mapped_MonId' => $monId,
+            'MonCotiz' => $monCotiz,
+        ]);
+        
         $detRequest = [
             'Concepto' => $concept,
             'DocTipo' => $docType,
@@ -360,8 +370,8 @@ class AfipInvoiceService
             'ImpOpEx' => 0,
             'ImpIVA' => round($impIVA, 2),
             'ImpTrib' => $invoice->total_perceptions,
-            'MonId' => $this->mapSystemCurrencyToAfip($invoice->currency),
-            'MonCotiz' => $invoice->currency === 'ARS' ? 1 : $invoice->exchange_rate,
+            'MonId' => $monId,
+            'MonCotiz' => $monCotiz,
         ];
         
         // Agregar CondicionIVAReceptorId (RG 5616) - Campo obligatorio desde 2024
@@ -662,7 +672,8 @@ class AfipInvoiceService
         $currencyMap = [
             'PES' => 'ARS',  // Pesos argentinos
             'DOL' => 'USD',  // Dólares estadounidenses
-            'EUR' => 'EUR',  // Euros
+            '060' => 'EUR',  // Euros (código numérico AFIP)
+            'EUR' => 'EUR',  // Euros (por compatibilidad)
             'Real' => 'BRL', // Reales brasileños
         ];
         
@@ -672,16 +683,20 @@ class AfipInvoiceService
     /**
      * Map system currency codes to AFIP format
      */
-    private function mapSystemCurrencyToAfip(string $systemCurrency): string
+    private function mapSystemCurrencyToAfip(?string $systemCurrency): string
     {
+        if (empty($systemCurrency)) {
+            return 'PES';
+        }
+        
         $currencyMap = [
             'ARS' => 'PES',  // Pesos argentinos
             'USD' => 'DOL',  // Dólares estadounidenses
-            'EUR' => 'EUR',  // Euros
+            'EUR' => '060',  // Euros (código numérico AFIP)
             'BRL' => 'Real', // Reales brasileños
         ];
         
-        return $currencyMap[$systemCurrency] ?? 'PES';
+        return $currencyMap[strtoupper($systemCurrency)] ?? 'PES';
     }
 
     /**
