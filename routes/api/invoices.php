@@ -9,6 +9,7 @@ Route::get('/next-number', [InvoiceController::class, 'getNextNumber']);
 Route::post('/', [InvoiceController::class, 'store']);
 Route::post('/received', [InvoiceController::class, 'storeReceived']);
 Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);
+Route::post('/sync-from-afip', [InvoiceController::class, 'syncFromAfip']);
 Route::post('/download-bulk', [InvoiceController::class, 'downloadBulk']);
 Route::get('/{id}', [InvoiceController::class, 'show']);
 Route::post('/{id}/cancel', [InvoiceController::class, 'cancel']);

@@ -655,6 +655,21 @@ class AfipInvoiceService
     }
 
     /**
+     * Map AFIP currency codes to system format
+     */
+    private function mapAfipCurrency(string $afipCurrency): string
+    {
+        $currencyMap = [
+            'PES' => 'ARS',  // Pesos argentinos
+            'DOL' => 'USD',  // Dólares estadounidenses
+            'EUR' => 'EUR',  // Euros
+            'Real' => 'BRL', // Reales brasileños
+        ];
+        
+        return $currencyMap[$afipCurrency] ?? 'ARS';
+    }
+
+    /**
      * Consult invoice from AFIP by CAE or invoice number
      */
     public function consultInvoice(string $issuerCuit, int $invoiceType, int $salesPoint, int $voucherNumber): array
@@ -675,24 +690,43 @@ class AfipInvoiceService
             $result = $response->FECompConsultarResult;
 
             if (isset($result->Errors) && $result->Errors) {
-                throw new \Exception('Invoice not found in AFIP');
+                throw new \Exception('Factura no encontrada en AFIP');
             }
 
             $invoice = $result->ResultGet;
+
+            $issueDate = isset($invoice->CbteFch) ? Carbon::createFromFormat('Ymd', $invoice->CbteFch)->format('Y-m-d') : null;
+            $dueDate = $issueDate ? Carbon::parse($issueDate)->addDays(30)->format('Y-m-d') : null;
+            
+            $afipCurrency = $invoice->MonId ?? 'PES';
+            $systemCurrency = $this->mapAfipCurrency($afipCurrency);
+            
+            // AFIP devuelve la cotización multiplicada por 10000
+            // Ejemplo: EUR a 1152.125 pesos = 11521250 en AFIP
+            $afipExchangeRate = $invoice->MonCotiz ?? 1;
+            $exchangeRate = $afipExchangeRate > 100 ? $afipExchangeRate / 10000 : $afipExchangeRate;
+            
+            Log::info('Currency mapping from AFIP', [
+                'afip_currency' => $afipCurrency,
+                'system_currency' => $systemCurrency,
+                'afip_exchange_rate' => $afipExchangeRate,
+                'exchange_rate' => $exchangeRate,
+            ]);
 
             return [
                 'found' => true,
                 'cae' => $invoice->CodAutorizacion ?? null,
                 'cae_expiration' => isset($invoice->FchVto) ? Carbon::createFromFormat('Ymd', $invoice->FchVto)->format('Y-m-d') : null,
-                'issue_date' => isset($invoice->CbteFch) ? Carbon::createFromFormat('Ymd', $invoice->CbteFch)->format('Y-m-d') : null,
+                'issue_date' => $issueDate,
+                'due_date' => $dueDate,
                 'doc_type' => $invoice->DocTipo ?? null,
                 'doc_number' => $invoice->DocNro ?? null,
                 'subtotal' => $invoice->ImpNeto ?? 0,
                 'total_taxes' => $invoice->ImpIVA ?? 0,
                 'total_perceptions' => $invoice->ImpTrib ?? 0,
                 'total' => $invoice->ImpTotal ?? 0,
-                'currency' => $invoice->MonId ?? 'PES',
-                'exchange_rate' => $invoice->MonCotiz ?? 1,
+                'currency' => $systemCurrency,
+                'exchange_rate' => $exchangeRate,
                 'result' => $invoice->Resultado ?? null,
             ];
             

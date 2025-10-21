@@ -395,24 +395,29 @@ class InvoiceController extends Controller
             ], 422);
         }
 
-        // Only allow deletion of drafts, pending approval, or rejected invoices
-        if (in_array($invoice->status, ['issued', 'approved', 'paid'])) {
-            return response()->json([
-                'message' => 'Cannot delete issued invoices. Use credit notes to cancel them.',
-                'suggestion' => 'Create a credit note (Nota de Crédito) to cancel this invoice.',
-            ], 422);
-        }
+        // En homologación, permitir borrar cualquier factura para testing
+        $company = Company::findOrFail($companyId);
+        $isHomologation = $company->afipCertificate && $company->afipCertificate->environment === 'testing';
+        
+        if (!$isHomologation) {
+            // En producción, aplicar validaciones estrictas
+            if (in_array($invoice->status, ['issued', 'approved', 'paid'])) {
+                return response()->json([
+                    'message' => 'No se puede eliminar facturas emitidas. Usá notas de crédito para anularlas.',
+                ], 422);
+            }
 
-        if ($invoice->afip_cae && !str_starts_with($invoice->afip_cae, 'SIM-')) {
-            return response()->json([
-                'message' => 'Cannot delete invoice with real AFIP CAE. Use credit notes to cancel.',
-            ], 422);
+            if ($invoice->afip_cae && !str_starts_with($invoice->afip_cae, 'SIM-')) {
+                return response()->json([
+                    'message' => 'No se puede eliminar facturas con CAE real. Usá notas de crédito.',
+                ], 422);
+            }
         }
 
         $invoice->delete();
 
         return response()->json([
-            'message' => 'Invoice deleted successfully',
+            'message' => 'Factura eliminada correctamente',
         ]);
     }
 
@@ -500,6 +505,255 @@ class InvoiceController extends Controller
                 'error' => $e->getMessage(),
             ], 422);
         }
+    }
+
+    public function syncFromAfip(Request $request, $companyId)
+    {
+        $company = Company::with('afipCertificate')->findOrFail($companyId);
+        
+        $this->authorize('create', [Invoice::class, $company]);
+
+        $validated = $request->validate([
+            'mode' => 'required|in:single,date_range',
+            'sales_point' => 'required_if:mode,single|integer|min:1|max:9999',
+            'invoice_type' => 'required_if:mode,single|string',
+            'invoice_number' => 'required_if:mode,single|integer|min:1',
+            'date_from' => 'required_if:mode,date_range|date',
+            'date_to' => 'required_if:mode,date_range|date|after_or_equal:date_from',
+        ]);
+
+        try {
+            $afipService = new AfipInvoiceService($company);
+            
+            if ($validated['mode'] === 'single') {
+                return $this->syncSingleInvoice($company, $afipService, $validated);
+            } else {
+                return $this->syncByDateRange($company, $afipService, $validated);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Sync from AFIP failed', [
+                'company_id' => $companyId,
+                'mode' => $validated['mode'] ?? 'unknown',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al sincronizar con AFIP',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    private function syncSingleInvoice($company, $afipService, $validated)
+    {
+        $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+        $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
+        
+        try {
+            $afipData = $afipService->consultInvoice(
+                $company->national_id,
+                $invoiceTypeCode,
+                $validated['sales_point'],
+                $validated['invoice_number']
+            );
+
+            if ($afipData['found']) {
+                DB::beginTransaction();
+                
+                $formattedNumber = sprintf('%04d-%08d', $validated['sales_point'], $validated['invoice_number']);
+                
+                // Verificar si ya existe (por company + type + sales_point + voucher_number)
+                $exists = Invoice::where('issuer_company_id', $company->id)
+                    ->where('type', $invoiceType)
+                    ->where('sales_point', $validated['sales_point'])
+                    ->where('voucher_number', $validated['invoice_number'])
+                    ->exists();
+                
+                Log::info('Checking if invoice exists', [
+                    'company_id' => $company->id,
+                    'type' => $invoiceType,
+                    'sales_point' => $validated['sales_point'],
+                    'voucher_number' => $validated['invoice_number'],
+                    'exists' => $exists,
+                ]);
+                
+                if (!$exists) {
+                    Invoice::create([
+                        'number' => $formattedNumber,
+                        'type' => $invoiceType,
+                        'sales_point' => $validated['sales_point'],
+                        'voucher_number' => $validated['invoice_number'],
+                        'concept' => 'products',
+                        'issuer_company_id' => $company->id,
+                        'issue_date' => $afipData['issue_date'],
+                        'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30)->format('Y-m-d'),
+                        'subtotal' => $afipData['subtotal'],
+                        'total_taxes' => $afipData['total_taxes'],
+                        'total_perceptions' => $afipData['total_perceptions'],
+                        'total' => $afipData['total'],
+                        'currency' => $afipData['currency'],
+                        'exchange_rate' => $afipData['exchange_rate'],
+                        'status' => 'issued',
+                        'afip_status' => 'approved',
+                        'afip_cae' => $afipData['cae'],
+                        'afip_cae_due_date' => $afipData['cae_expiration'],
+                        'created_by' => auth()->id(),
+                    ]);
+                }
+                
+                DB::commit();
+                
+                return response()->json([
+                    'success' => true,
+                    'imported_count' => 1,
+                    'invoices' => [[
+                        'sales_point' => $validated['sales_point'],
+                        'type' => $validated['invoice_type'],
+                        'number' => $validated['invoice_number'],
+                        'formatted_number' => $formattedNumber,
+                        'data' => $afipData,
+                        'saved' => !$exists,
+                    ]],
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Factura no encontrada en AFIP',
+                ], 404);
+            }
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Single invoice sync failed', [
+                'company_id' => $company->id,
+                'sales_point' => $validated['sales_point'],
+                'invoice_type' => $validated['invoice_type'],
+                'invoice_number' => $validated['invoice_number'],
+                'error' => $e->getMessage(),
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'message' => 'Error al consultar factura',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    private function syncByDateRange($company, $afipService, $validated)
+    {
+        $dateFrom = \Carbon\Carbon::parse($validated['date_from'])->startOfDay();
+        $dateTo = \Carbon\Carbon::parse($validated['date_to'])->endOfDay();
+        
+        // Validar que el rango no supere 90 días (3 meses)
+        if ($dateFrom->diffInDays($dateTo) > 90) {
+            return response()->json([
+                'success' => false,
+                'message' => 'El rango de fechas no puede superar los 90 días (3 meses)',
+            ], 422);
+        }
+        
+        // Incluir facturas, NC y ND
+        $voucherTypes = [
+            'A', 'B', 'C', 'M',  // Facturas
+            'NCA', 'NCB', 'NCC', 'NCM',  // Notas de Crédito
+            'NDA', 'NDB', 'NDC', 'NDM'   // Notas de Débito
+        ];
+        
+        // Obtener puntos de venta autorizados desde AFIP
+        $salesPoints = $this->getAuthorizedSalesPoints($company);
+        
+        $imported = [];
+        $summary = [];
+
+        foreach ($voucherTypes as $type) {
+            $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($type) ?? $type;
+            $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
+            
+            foreach ($salesPoints as $salesPoint) {
+                try {
+                    $lastAfipNumber = $afipService->getLastAuthorizedInvoice($salesPoint, $invoiceTypeCode);
+                    
+                    if ($lastAfipNumber == 0 || $lastAfipNumber === null) continue;
+                    
+                    $summary[] = [
+                        'sales_point' => $salesPoint,
+                        'type' => $type,
+                        'last_number' => $lastAfipNumber,
+                    ];
+                    
+                    for ($num = 1; $num <= $lastAfipNumber; $num++) {
+                        try {
+                            $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
+
+                            if ($afipData['found']) {
+                                $issueDate = \Carbon\Carbon::parse($afipData['issue_date']);
+                                
+                                if ($issueDate->between($dateFrom, $dateTo)) {
+                                    $formattedNumber = sprintf('%04d-%08d', $salesPoint, $num);
+                                    
+                                    // Verificar si ya existe (por company + type + sales_point + voucher_number)
+                                    $exists = Invoice::where('issuer_company_id', $company->id)
+                                        ->where('type', $invoiceType)
+                                        ->where('sales_point', $salesPoint)
+                                        ->where('voucher_number', $num)
+                                        ->exists();
+                                    
+                                    if (!$exists) {
+                                        Invoice::create([
+                                            'number' => $formattedNumber,
+                                            'type' => $invoiceType,
+                                            'sales_point' => $salesPoint,
+                                            'voucher_number' => $num,
+                                            'concept' => 'products',
+                                            'issuer_company_id' => $company->id,
+                                            'issue_date' => $afipData['issue_date'],
+                                            'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30)->format('Y-m-d'),
+                                            'subtotal' => $afipData['subtotal'],
+                                            'total_taxes' => $afipData['total_taxes'],
+                                            'total_perceptions' => $afipData['total_perceptions'],
+                                            'total' => $afipData['total'],
+                                            'currency' => $afipData['currency'],
+                                            'exchange_rate' => $afipData['exchange_rate'],
+                                            'status' => 'issued',
+                                            'afip_status' => 'approved',
+                                            'afip_cae' => $afipData['cae'],
+                                            'afip_cae_due_date' => $afipData['cae_expiration'],
+                                            'created_by' => auth()->id(),
+                                        ]);
+                                    }
+                                    
+                                    $imported[] = [
+                                        'sales_point' => $salesPoint,
+                                        'type' => $type,
+                                        'number' => $num,
+                                        'formatted_number' => $formattedNumber,
+                                        'data' => $afipData,
+                                        'saved' => !$exists,
+                                    ];
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            // Silenciar errores individuales
+                        }
+                    }
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'imported_count' => count($imported),
+            'summary' => $summary,
+            'invoices' => $imported,
+            'date_from' => $dateFrom->format('Y-m-d'),
+            'date_to' => $dateTo->format('Y-m-d'),
+        ]);
     }
 
     private function getAfipInvoiceTypeCode(string $type): int
@@ -891,5 +1145,32 @@ class InvoiceController extends Controller
     {
         // All perceptions default to net (without IVA)
         return 'net';
+    }
+
+    private function getAuthorizedSalesPoints($company): array
+    {
+        try {
+            $client = new \App\Services\Afip\AfipWebServiceClient($company->afipCertificate);
+            $salesPoints = $client->getSalesPoints();
+            
+            // Filtrar solo puntos activos (no bloqueados y sin fecha de baja)
+            $activePoints = array_filter($salesPoints, function($sp) {
+                return !$sp['blocked'] && empty($sp['drop_date']);
+            });
+            
+            $numbers = array_map(fn($sp) => $sp['point_number'], $activePoints);
+            
+            Log::info('Retrieved authorized sales points from AFIP', [
+                'company_id' => $company->id,
+                'points' => $numbers,
+            ]);
+            
+            return !empty($numbers) ? $numbers : range(1, 10);
+        } catch (\Exception $e) {
+            Log::warning('Could not get sales points from AFIP, using fallback', [
+                'error' => $e->getMessage()
+            ]);
+            return range(1, 10);
+        }
     }
 }
