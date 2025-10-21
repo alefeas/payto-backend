@@ -88,6 +88,15 @@ class InvoiceController extends Controller
             ], 403);
         }
 
+        // Obtener mensajes de validación desde configuración
+        $validationMessages = array_merge(
+            config('afip_rules.validation_messages', []),
+            [
+                'items.*.quantity.max' => 'La cantidad no puede superar las 999,999 unidades. Si necesitás facturar más, dividí en múltiples ítems.',
+                'items.*.unit_price.max' => 'El precio unitario no puede superar $999,999,999. Si necesitás facturar montos mayores, dividí en múltiples ítems.',
+            ]
+        );
+
         $validated = $request->validate([
             'client_id' => 'required_without_all:client_data,receiver_company_id|exists:clients,id',
             'receiver_company_id' => 'nullable|exists:companies,id',
@@ -102,6 +111,9 @@ class InvoiceController extends Controller
             'save_client' => 'boolean',
             'invoice_type' => 'required|string',
             'sales_point' => 'required|integer|min:1|max:9999',
+            'concept' => 'required|in:products,services,products_services',
+            'service_date_from' => 'nullable|date',
+            'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
             'issue_date' => 'required|date',
             'due_date' => 'nullable|date|after_or_equal:issue_date',
             'currency' => 'nullable|string|size:3',
@@ -120,10 +132,7 @@ class InvoiceController extends Controller
             'perceptions.*.amount' => 'nullable|numeric|min:0',
             'perceptions.*.jurisdiction' => 'nullable|string|max:100',
             'perceptions.*.base_type' => 'nullable|in:net,total,vat',
-        ], [
-            'items.*.quantity.max' => 'La cantidad no puede superar las 999,999 unidades. Si necesitás facturar más, dividí en múltiples ítems.',
-            'items.*.unit_price.max' => 'El precio unitario no puede superar $999,999,999. Si necesitás facturar montos mayores, dividí en múltiples ítems.',
-        ]);
+        ], $validationMessages);
 
         try {
             DB::beginTransaction();
@@ -230,7 +239,9 @@ class InvoiceController extends Controller
                 'type' => $invoiceType,
                 'sales_point' => $validated['sales_point'],
                 'voucher_number' => $voucherNumber,
-                'concept' => 'products',
+                'concept' => $validated['concept'],
+                'service_date_from' => $validated['service_date_from'] ?? null,
+                'service_date_to' => $validated['service_date_to'] ?? null,
                 'issuer_company_id' => $companyId,
                 'receiver_company_id' => $validated['receiver_company_id'] ?? null,
                 'client_id' => $validated['client_id'] ?? null,

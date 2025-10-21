@@ -1,0 +1,13 @@
+feat: add concept and service dates to compatible invoices response
+
+- Include concept field in getCompatibleInvoices response
+- Include service_date_from and service_date_to fields
+- Enable frontend to auto-fill concept and service dates for associated credit/debit notes
+- Improve data consistency between invoices and related vouchers
+
+AFIP compliance:
+- Service dates are required for services and products_services concepts
+- Credit/debit notes must maintain same concept and service dates as original invoice
+
+Files modified:
+- app/Http/Controllers/Api/VoucherController.php

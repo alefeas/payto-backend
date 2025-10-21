@@ -1,0 +1,17 @@
+perf: optimize company network queries and fix intermittent loading errors
+
+- Refactor CompanyConnectionController index() method to eliminate N+1 queries
+- Replace individual queries per connection with aggregated queries
+- Reduce database queries from N×5 to 3 total queries (94% improvement)
+- Add eager loading for connectedCompany relation in pendingRequests() and sentRequests()
+- Improve query performance for invoice statistics (sent/received counts and amounts)
+- Replace ROW_NUMBER window function with collection-based approach for better MySQL compatibility
+- Fix intermittent "Error loading data" issues caused by query timeouts
+
+Performance impact:
+- 10 connections: 50+ queries → 3 queries
+- Significantly faster response times
+- Reduced database load and CPU usage
+
+Files modified:
+- app/Http/Controllers/Api/CompanyConnectionController.php

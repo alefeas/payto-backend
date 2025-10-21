@@ -1,0 +1,21 @@
+feat: add service dates to AFIP and auto-inherit sales point for NC/ND
+
+Service Dates Implementation:
+- Send FchServDesde, FchServHasta to AFIP for concept 2 (services) and 3 (products+services)
+- Send FchVtoPago (payment due date) for services (required by AFIP)
+- Fallback to issue date if service dates are missing
+- Add concept, service_date_from, service_date_to to compatible invoices response
+
+Sales Point Auto-Inheritance:
+- Add sales_point to compatible invoices response
+- NC/ND automatically inherit sales point from associated invoice
+- Ensures AFIP compliance (NC/ND must use same sales point as original invoice)
+
+AFIP Compliance:
+- Service dates required for concept 2 (services) and 3 (products+services)
+- NC/ND must use same sales point as original invoice
+- Payment due date required for services
+
+Files modified:
+- app/Services/Afip/AfipInvoiceService.php
+- app/Http/Controllers/Api/VoucherController.php

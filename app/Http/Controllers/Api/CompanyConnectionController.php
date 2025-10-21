@@ -24,44 +24,72 @@ class CompanyConnectionController extends Controller
                   ->orWhere('connected_company_id', $companyId);
         })
         ->where('status', 'connected')
-        ->with(['company', 'connectedCompany'])
-        ->get()
-        ->map(function($connection) use ($companyId) {
-            $isInitiator = $connection->company_id === $companyId;
-            $connectedCompany = $isInitiator ? $connection->connectedCompany : $connection->company;
-            
-            $invoicesSent = Invoice::where('issuer_company_id', $companyId)
-                ->where('receiver_company_id', $connectedCompany->id)
-                ->count();
-            
-            $invoicesReceived = Invoice::where('issuer_company_id', $connectedCompany->id)
-                ->where('receiver_company_id', $companyId)
-                ->count();
-            
-            $amountSent = Invoice::where('issuer_company_id', $companyId)
-                ->where('receiver_company_id', $connectedCompany->id)
-                ->sum('total');
-            
-            $amountReceived = Invoice::where('issuer_company_id', $connectedCompany->id)
-                ->where('receiver_company_id', $companyId)
-                ->sum('total');
-            
-            $lastTransaction = Invoice::where(function($q) use ($companyId, $connectedCompany) {
-                $q->where(function($q2) use ($companyId, $connectedCompany) {
+        ->with(['company', 'connectedCompany', 'requestedByUser'])
+        ->get();
+
+        if ($connections->isEmpty()) {
+            return response()->json([]);
+        }
+
+        // Obtener IDs de empresas conectadas
+        $connectedCompanyIds = $connections->map(function($connection) use ($companyId) {
+            return $connection->company_id === $companyId 
+                ? $connection->connected_company_id 
+                : $connection->company_id;
+        })->unique()->values();
+
+        // Consultas agregadas optimizadas (1 query por métrica en lugar de N queries)
+        $invoicesSent = Invoice::where('issuer_company_id', $companyId)
+            ->whereIn('receiver_company_id', $connectedCompanyIds)
+            ->select('receiver_company_id', 
+                DB::raw('COUNT(*) as count'), 
+                DB::raw('SUM(total) as total'))
+            ->groupBy('receiver_company_id')
+            ->get()
+            ->keyBy('receiver_company_id');
+
+        $invoicesReceived = Invoice::whereIn('issuer_company_id', $connectedCompanyIds)
+            ->where('receiver_company_id', $companyId)
+            ->select('issuer_company_id', 
+                DB::raw('COUNT(*) as count'), 
+                DB::raw('SUM(total) as total'))
+            ->groupBy('issuer_company_id')
+            ->get()
+            ->keyBy('issuer_company_id');
+
+        // Obtener última transacción por empresa conectada
+        $lastTransactions = collect();
+        foreach ($connectedCompanyIds as $connectedId) {
+            $lastTx = Invoice::where(function($q) use ($companyId, $connectedId) {
+                $q->where(function($q2) use ($companyId, $connectedId) {
                     $q2->where('issuer_company_id', $companyId)
-                       ->where('receiver_company_id', $connectedCompany->id);
-                })->orWhere(function($q2) use ($companyId, $connectedCompany) {
-                    $q2->where('issuer_company_id', $connectedCompany->id)
+                       ->where('receiver_company_id', $connectedId);
+                })->orWhere(function($q2) use ($companyId, $connectedId) {
+                    $q2->where('issuer_company_id', $connectedId)
                        ->where('receiver_company_id', $companyId);
                 });
             })
             ->orderBy('created_at', 'desc')
             ->first();
             
+            if ($lastTx) {
+                $lastTransactions->put($connectedId, $lastTx);
+            }
+        }
+        
+        $result = $connections->map(function($connection) use ($companyId, $invoicesSent, $invoicesReceived, $lastTransactions) {
+            $isInitiator = $connection->company_id === $companyId;
+            $connectedCompany = $isInitiator ? $connection->connectedCompany : $connection->company;
+            $connectedCompanyId = $connectedCompany->id;
+            
+            $sent = $invoicesSent->get($connectedCompanyId);
+            $received = $invoicesReceived->get($connectedCompanyId);
+            $lastTx = $lastTransactions->get($connectedCompanyId);
+            
             return [
                 'id' => $connection->id,
                 'companyId' => $companyId,
-                'connectedCompanyId' => $connectedCompany->id,
+                'connectedCompanyId' => $connectedCompanyId,
                 'connectedCompanyName' => $connectedCompany->name,
                 'connectedCompanyUniqueId' => $connectedCompany->unique_id,
                 'connectedCompanyCuit' => $connectedCompany->cuit,
@@ -70,15 +98,15 @@ class CompanyConnectionController extends Controller
                 'requestedAt' => $connection->created_at,
                 'connectedAt' => $connection->connected_at,
                 'requestedBy' => $connection->requestedByUser?->email ?? null,
-                'totalInvoicesSent' => $invoicesSent,
-                'totalInvoicesReceived' => $invoicesReceived,
-                'totalAmountSent' => $amountSent,
-                'totalAmountReceived' => $amountReceived,
-                'lastTransactionDate' => $lastTransaction?->created_at,
+                'totalInvoicesSent' => $sent?->count ?? 0,
+                'totalInvoicesReceived' => $received?->count ?? 0,
+                'totalAmountSent' => $sent?->total ?? 0,
+                'totalAmountReceived' => $received?->total ?? 0,
+                'lastTransactionDate' => $lastTx?->created_at ?? null,
             ];
         });
 
-        return response()->json($connections);
+        return response()->json($result);
     }
 
     public function pendingRequests($companyId)
@@ -88,7 +116,7 @@ class CompanyConnectionController extends Controller
         
         $requests = CompanyConnection::where('connected_company_id', $companyId)
             ->where('status', 'pending')
-            ->with(['company', 'requestedByUser'])
+            ->with(['company', 'connectedCompany', 'requestedByUser'])
             ->get()
             ->map(function($connection) {
                 return [
@@ -114,7 +142,7 @@ class CompanyConnectionController extends Controller
         
         $requests = CompanyConnection::where('company_id', $companyId)
             ->where('status', 'pending')
-            ->with(['connectedCompany', 'requestedByUser'])
+            ->with(['company', 'connectedCompany', 'requestedByUser'])
             ->get()
             ->map(function($connection) {
                 return [

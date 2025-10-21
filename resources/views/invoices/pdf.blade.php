@@ -66,7 +66,25 @@
         </p>
     </div>
 
-    <p style="margin-bottom: 8px;"><strong>Emisión:</strong> {{ $invoice->issue_date->format('d/m/Y') }} | <strong>Vencimiento:</strong> {{ $invoice->due_date->format('d/m/Y') }}</p>
+    <p style="margin-bottom: 8px;">
+        <strong>Emisión:</strong> {{ $invoice->issue_date->format('d/m/Y') }} | 
+        <strong>Vencimiento:</strong> {{ $invoice->due_date->format('d/m/Y') }} | 
+        <strong>Concepto:</strong> 
+        @php
+            $conceptMap = [
+                'products' => 'Productos',
+                'services' => 'Servicios',
+                'products_services' => 'Productos y Servicios',
+                1 => 'Productos',
+                2 => 'Servicios',
+                3 => 'Productos y Servicios',
+            ];
+            echo $conceptMap[$invoice->concept] ?? 'Productos';
+        @endphp
+        @if(in_array($invoice->concept, ['services', 'products_services', 2, 3]) && $invoice->service_date_from && $invoice->service_date_to)
+            <br><strong>Período de Servicio:</strong> {{ $invoice->service_date_from->format('d/m/Y') }} al {{ $invoice->service_date_to->format('d/m/Y') }}
+        @endif
+    </p>
 
     <table class="items-table">
         <thead>

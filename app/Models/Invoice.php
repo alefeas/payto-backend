@@ -19,6 +19,8 @@ class Invoice extends Model
         'voucher_number',
         'afip_voucher_type',
         'concept',
+        'service_date_from',
+        'service_date_to',
         'issuer_company_id',
         'receiver_company_id',
         'client_id',
@@ -68,6 +70,8 @@ class Invoice extends Model
     protected $casts = [
         'issue_date' => 'date',
         'due_date' => 'date',
+        'service_date_from' => 'date',
+        'service_date_to' => 'date',
         'payment_due_date' => 'date',
         'afip_cae_due_date' => 'date',
         'approval_date' => 'datetime',

@@ -121,7 +121,16 @@ class AfipInvoiceService
                     'errors' => $errors,
                 ]);
                 
-                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
+                // Intentar mapear errores de AFIP a mensajes amigables
+                $friendlyErrors = array_map(function($err) {
+                    $errorConfig = config('afip_rules.error_messages.' . $err->Code);
+                    if ($errorConfig) {
+                        return "[{$err->Code}] {$errorConfig['message']}\nSolución: {$errorConfig['solution']}";
+                    }
+                    return "[{$err->Code}] {$err->Msg}";
+                }, $errors);
+                
+                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $friendlyErrors));
             }
 
             $detail = $result->FeDetResp->FECAEDetResponse;
@@ -139,7 +148,21 @@ class AfipInvoiceService
                     'observations' => $observations,
                 ]);
                 
-                $obsMsg = !empty($observations) ? implode(' | ', $observations) : 'Sin detalles';
+                // Intentar mapear observaciones a mensajes amigables
+                $friendlyObs = [];
+                if (isset($detail->Observaciones)) {
+                    $obs = is_array($detail->Observaciones->Obs) ? $detail->Observaciones->Obs : [$detail->Observaciones->Obs];
+                    foreach ($obs as $o) {
+                        $errorConfig = config('afip_rules.error_messages.' . $o->Code);
+                        if ($errorConfig) {
+                            $friendlyObs[] = "[{$o->Code}] {$errorConfig['message']}\nSolución: {$errorConfig['solution']}";
+                        } else {
+                            $friendlyObs[] = "[{$o->Code}] {$o->Msg}";
+                        }
+                    }
+                }
+                
+                $obsMsg = !empty($friendlyObs) ? implode(' | ', $friendlyObs) : 'Sin detalles';
                 throw new \Exception('AFIP no aprobó la factura: ' . $obsMsg);
             }
 
@@ -269,7 +292,8 @@ class AfipInvoiceService
         $this->validateInvoiceTypeCompatibility($invoiceType, $condicionIva, $receptor);
         
         $docType = $this->getAfipDocType($receptor);
-        $concept = $invoice->concept === 'services' ? 2 : ($invoice->concept === 'products_and_services' ? 3 : 1);
+        // Obtener concepto desde configuración
+        $concept = config('afip_rules.concept_mapping.' . $invoice->concept, 1);
 
         // Validar fecha según concepto (AFIP error 10016)
         $issueDate = $invoice->issue_date;
@@ -393,6 +417,23 @@ class AfipInvoiceService
         // Agregar fecha de vencimiento para FCE MiPyME
         if ($category === 'fce_mipyme' && $invoice->payment_due_date) {
             $detRequest['FchVtoPago'] = $invoice->payment_due_date->format('Ymd');
+        }
+
+        // Agregar fechas de servicio (obligatorias para concepto 2 y 3)
+        if ($concept !== 1) {
+            if ($invoice->service_date_from && $invoice->service_date_to) {
+                $detRequest['FchServDesde'] = $invoice->service_date_from->format('Ymd');
+                $detRequest['FchServHasta'] = $invoice->service_date_to->format('Ymd');
+                if ($category !== 'fce_mipyme' && $invoice->due_date) {
+                    $detRequest['FchVtoPago'] = $invoice->due_date->format('Ymd');
+                }
+            } else {
+                $detRequest['FchServDesde'] = $issueDate->format('Ymd');
+                $detRequest['FchServHasta'] = $issueDate->format('Ymd');
+                if ($category !== 'fce_mipyme' && $invoice->due_date) {
+                    $detRequest['FchVtoPago'] = $invoice->due_date->format('Ymd');
+                }
+            }
         }
 
         return [

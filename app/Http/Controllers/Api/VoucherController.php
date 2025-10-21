@@ -110,10 +110,14 @@ class VoucherController extends Controller
                     'id' => $invoice->id,
                     'invoice_number' => $invoice->number,
                     'invoice_type' => $invoice->type,
+                    'sales_point' => $invoice->sales_point,
                     'issue_date' => $invoice->issue_date->format('Y-m-d'),
                     'client_name' => $clientName,
                     'total_amount' => $invoice->total,
                     'available_balance' => $invoice->balance_pending ?? $invoice->total,
+                    'concept' => $invoice->concept ?? 'products',
+                    'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
+                    'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
                 ];
             });
         
