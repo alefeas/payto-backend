@@ -16,6 +16,22 @@ class IvaBookController extends Controller
 {
     use ApiResponse;
 
+    /**
+     * Normaliza condición IVA según AFIP para Libro IVA
+     * Consumidor Final y Monotributo = Responsable No Inscripto
+     */
+    private function normalizeAfipTaxCondition(?string $taxCondition): string
+    {
+        if (!$taxCondition) return 'Responsable No Inscripto';
+        
+        return match($taxCondition) {
+            'registered_taxpayer' => 'Responsable Inscripto',
+            'exempt' => 'Exento',
+            'final_consumer', 'monotax' => 'Responsable No Inscripto',
+            default => 'Responsable No Inscripto'
+        };
+    }
+
     public function getSalesBook(Request $request, string $companyId): JsonResponse
     {
         $company = Company::with('members')->whereHas('members', function ($query) {
@@ -79,10 +95,14 @@ class IvaBookController extends Controller
             $client = $invoice->client ?? $invoice->relatedInvoice?->client;
             $clientName = 'CLIENTE ELIMINADO';
             $clientCuit = '00000000000';
+            $clientTaxCondition = null;
             
             if ($client) {
                 $clientName = $client->business_name ?? trim(($client->first_name ?? '') . ' ' . ($client->last_name ?? '')) ?: 'Sin nombre';
                 $clientCuit = $client->document_number;
+                $clientTaxCondition = $this->normalizeAfipTaxCondition($client->tax_condition);
+            } else {
+                $clientTaxCondition = 'Responsable No Inscripto';
             }
             
             // NC resta, ND/Factura suma
@@ -96,6 +116,7 @@ class IvaBookController extends Controller
                 'numero' => str_pad($invoice->voucher_number, 8, '0', STR_PAD_LEFT),
                 'cliente' => $clientName,
                 'cuit' => $clientCuit,
+                'condicion_iva' => $clientTaxCondition,
                 'neto_gravado' => 0,
                 'iva_21' => 0,
                 'iva_105' => 0,
@@ -246,10 +267,14 @@ class IvaBookController extends Controller
 
             $supplierName = 'PROVEEDOR ELIMINADO';
             $supplierCuit = '00000000000';
+            $supplierTaxCondition = null;
             
             if ($invoice->supplier) {
                 $supplierName = $invoice->supplier->business_name ?? trim(($invoice->supplier->first_name ?? '') . ' ' . ($invoice->supplier->last_name ?? '')) ?: 'Sin nombre';
                 $supplierCuit = $invoice->supplier->document_number;
+                $supplierTaxCondition = $this->normalizeAfipTaxCondition($invoice->supplier->tax_condition);
+            } else {
+                $supplierTaxCondition = 'Responsable No Inscripto';
             }
             
             // En COMPRAS: NC suma (te devuelven IVA), ND resta (te cobran más IVA)
@@ -263,6 +288,7 @@ class IvaBookController extends Controller
                 'numero' => str_pad($invoice->voucher_number, 8, '0', STR_PAD_LEFT),
                 'proveedor' => $supplierName,
                 'cuit' => $supplierCuit,
+                'condicion_iva' => $supplierTaxCondition,
                 'neto_gravado' => 0,
                 'iva_21' => 0,
                 'iva_105' => 0,
