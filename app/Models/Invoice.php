@@ -92,6 +92,8 @@ class Invoice extends Model
         'transport_data' => 'array',
     ];
 
+    protected $appends = ['pending_amount'];
+
     public function issuerCompany(): BelongsTo
     {
         return $this->belongsTo(Company::class, 'issuer_company_id');
@@ -173,12 +175,17 @@ class Invoice extends Model
 
     public function getTotalPaidAttribute(): float
     {
-        return $this->payments()->sum('amount');
+        return (float) $this->payments()->sum('amount');
     }
 
     public function getRemainingAmountAttribute(): float
     {
-        return $this->total - $this->getTotalPaidAttribute();
+        return (float) $this->total - $this->getTotalPaidAttribute();
+    }
+
+    public function getPendingAmountAttribute(): float
+    {
+        return $this->getRemainingAmountAttribute();
     }
 
     public function isPaid(): bool
