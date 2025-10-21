@@ -360,8 +360,8 @@ class AfipInvoiceService
             'ImpOpEx' => 0,
             'ImpIVA' => round($impIVA, 2),
             'ImpTrib' => $invoice->total_perceptions,
-            'MonId' => 'PES',
-            'MonCotiz' => 1,
+            'MonId' => $this->mapSystemCurrencyToAfip($invoice->currency),
+            'MonCotiz' => $invoice->currency === 'ARS' ? 1 : $invoice->exchange_rate,
         ];
         
         // Agregar CondicionIVAReceptorId (RG 5616) - Campo obligatorio desde 2024
@@ -667,6 +667,21 @@ class AfipInvoiceService
         ];
         
         return $currencyMap[$afipCurrency] ?? 'ARS';
+    }
+
+    /**
+     * Map system currency codes to AFIP format
+     */
+    private function mapSystemCurrencyToAfip(string $systemCurrency): string
+    {
+        $currencyMap = [
+            'ARS' => 'PES',  // Pesos argentinos
+            'USD' => 'DOL',  // Dólares estadounidenses
+            'EUR' => 'EUR',  // Euros
+            'BRL' => 'Real', // Reales brasileños
+        ];
+        
+        return $currencyMap[$systemCurrency] ?? 'PES';
     }
 
     /**
