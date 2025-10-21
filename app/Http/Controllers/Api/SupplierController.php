@@ -65,9 +65,14 @@ class SupplierController extends Controller
             'bank_alias' => 'nullable|string|max:50'
         ]);
         
-        // Require document for non-final_consumer
-        if ($validated['tax_condition'] !== 'final_consumer' && empty($validated['document_number'])) {
-            return response()->json(['message' => 'Document number is required for this tax condition'], 422);
+        // Require CUIT/CUIL for non-final_consumer
+        if ($validated['tax_condition'] !== 'final_consumer') {
+            if (empty($validated['document_number'])) {
+                return response()->json(['message' => 'CUIT/CUIL es obligatorio para esta condición fiscal'], 422);
+            }
+            if (!in_array($validated['document_type'], ['CUIT', 'CUIL'])) {
+                return response()->json(['message' => 'Debe usar CUIT o CUIL para esta condición fiscal'], 422);
+            }
         }
 
         if (empty($validated['email']) && empty($validated['phone'])) {
@@ -117,11 +122,17 @@ class SupplierController extends Controller
             'bank_alias' => 'nullable|string|max:50'
         ]);
         
-        // Require document for non-final_consumer
+        // Require CUIT/CUIL for non-final_consumer
         $taxCondition = $validated['tax_condition'] ?? $supplier->tax_condition;
         $docNumber = $validated['document_number'] ?? $supplier->document_number;
-        if ($taxCondition !== 'final_consumer' && empty($docNumber)) {
-            return response()->json(['message' => 'Document number is required for this tax condition'], 422);
+        $docType = $validated['document_type'] ?? $supplier->document_type;
+        if ($taxCondition !== 'final_consumer') {
+            if (empty($docNumber)) {
+                return response()->json(['message' => 'CUIT/CUIL es obligatorio para esta condición fiscal'], 422);
+            }
+            if (!in_array($docType, ['CUIT', 'CUIL'])) {
+                return response()->json(['message' => 'Debe usar CUIT o CUIL para esta condición fiscal'], 422);
+            }
         }
 
         $email = $validated['email'] ?? $supplier->email;

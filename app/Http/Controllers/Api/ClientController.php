@@ -70,9 +70,14 @@ class ClientController extends Controller
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
         
-        // Require document for non-final_consumer
-        if ($validated['tax_condition'] !== 'final_consumer' && empty($validated['document_number'])) {
-            return $this->error('Document number is required for this tax condition', 422);
+        // Require CUIT/CUIL for non-final_consumer
+        if ($validated['tax_condition'] !== 'final_consumer') {
+            if (empty($validated['document_number'])) {
+                return $this->error('CUIT/CUIL es obligatorio para esta condición fiscal', 422);
+            }
+            if (!in_array($validated['document_type'], ['CUIT', 'CUIL'])) {
+                return $this->error('Debe usar CUIT o CUIL para esta condición fiscal', 422);
+            }
         }
 
         if (empty($validated['email']) && empty($validated['phone'])) {
@@ -122,11 +127,17 @@ class ClientController extends Controller
             'tax_condition' => 'sometimes|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
         
-        // Require document for non-final_consumer
+        // Require CUIT/CUIL for non-final_consumer
         $taxCondition = $validated['tax_condition'] ?? $client->tax_condition;
         $docNumber = $validated['document_number'] ?? $client->document_number;
-        if ($taxCondition !== 'final_consumer' && empty($docNumber)) {
-            return $this->error('Document number is required for this tax condition', 422);
+        $docType = $validated['document_type'] ?? $client->document_type;
+        if ($taxCondition !== 'final_consumer') {
+            if (empty($docNumber)) {
+                return $this->error('CUIT/CUIL es obligatorio para esta condición fiscal', 422);
+            }
+            if (!in_array($docType, ['CUIT', 'CUIL'])) {
+                return $this->error('Debe usar CUIT o CUIL para esta condición fiscal', 422);
+            }
         }
 
         $email = $validated['email'] ?? $client->email;
