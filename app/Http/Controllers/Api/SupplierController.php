@@ -49,8 +49,8 @@ class SupplierController extends Controller
         $company = Company::findOrFail($companyId);
         $this->authorize('create', [Supplier::class, $company]);
         $validated = $request->validate([
-            'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => ['required', 'string', 'max:20', new \App\Rules\ValidNationalId()],
+            'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
+            'document_number' => ['nullable', 'string', 'max:20', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string|max:100',
             'first_name' => 'nullable|string|max:50',
             'last_name' => 'nullable|string|max:50',
@@ -64,6 +64,11 @@ class SupplierController extends Controller
             'bank_cbu' => 'nullable|string|max:22',
             'bank_alias' => 'nullable|string|max:50'
         ]);
+        
+        // Require document for non-final_consumer
+        if ($validated['tax_condition'] !== 'final_consumer' && empty($validated['document_number'])) {
+            return response()->json(['message' => 'Document number is required for this tax condition'], 422);
+        }
 
         if (empty($validated['email']) && empty($validated['phone'])) {
             return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
@@ -96,8 +101,8 @@ class SupplierController extends Controller
         $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
 
         $validated = $request->validate([
-            'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => ['required', 'string', 'max:20', new \App\Rules\ValidNationalId()],
+            'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
+            'document_number' => ['nullable', 'string', 'max:20', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string|max:100',
             'first_name' => 'nullable|string|max:50',
             'last_name' => 'nullable|string|max:50',
@@ -111,6 +116,13 @@ class SupplierController extends Controller
             'bank_cbu' => 'nullable|string|max:22',
             'bank_alias' => 'nullable|string|max:50'
         ]);
+        
+        // Require document for non-final_consumer
+        $taxCondition = $validated['tax_condition'] ?? $supplier->tax_condition;
+        $docNumber = $validated['document_number'] ?? $supplier->document_number;
+        if ($taxCondition !== 'final_consumer' && empty($docNumber)) {
+            return response()->json(['message' => 'Document number is required for this tax condition'], 422);
+        }
 
         $email = $validated['email'] ?? $supplier->email;
         $phone = $validated['phone'] ?? $supplier->phone;

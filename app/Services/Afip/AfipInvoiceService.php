@@ -121,16 +121,7 @@ class AfipInvoiceService
                     'errors' => $errors,
                 ]);
                 
-                // Intentar mapear errores de AFIP a mensajes amigables
-                $friendlyErrors = array_map(function($err) {
-                    $errorConfig = config('afip_rules.error_messages.' . $err->Code);
-                    if ($errorConfig) {
-                        return "[{$err->Code}] {$errorConfig['message']}\nSolución: {$errorConfig['solution']}";
-                    }
-                    return "[{$err->Code}] {$err->Msg}";
-                }, $errors);
-                
-                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $friendlyErrors));
+                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
             }
 
             $detail = $result->FeDetResp->FECAEDetResponse;
@@ -148,21 +139,7 @@ class AfipInvoiceService
                     'observations' => $observations,
                 ]);
                 
-                // Intentar mapear observaciones a mensajes amigables
-                $friendlyObs = [];
-                if (isset($detail->Observaciones)) {
-                    $obs = is_array($detail->Observaciones->Obs) ? $detail->Observaciones->Obs : [$detail->Observaciones->Obs];
-                    foreach ($obs as $o) {
-                        $errorConfig = config('afip_rules.error_messages.' . $o->Code);
-                        if ($errorConfig) {
-                            $friendlyObs[] = "[{$o->Code}] {$errorConfig['message']}\nSolución: {$errorConfig['solution']}";
-                        } else {
-                            $friendlyObs[] = "[{$o->Code}] {$o->Msg}";
-                        }
-                    }
-                }
-                
-                $obsMsg = !empty($friendlyObs) ? implode(' | ', $friendlyObs) : 'Sin detalles';
+                $obsMsg = !empty($observations) ? implode(' | ', $observations) : 'Sin detalles';
                 throw new \Exception('AFIP no aprobó la factura: ' . $obsMsg);
             }
 
@@ -285,11 +262,7 @@ class AfipInvoiceService
         $condicionIva = $this->getAfipCondicionIva($receptor);
         $invoiceType = $this->getAfipInvoiceType($invoice->type);
         
-        // Validar condición IVA del EMISOR (crítico)
-        $this->validateIssuerTaxCondition($invoiceType);
-        
-        // Validar compatibilidad tipo de comprobante con condición IVA del RECEPTOR
-        $this->validateInvoiceTypeCompatibility($invoiceType, $condicionIva, $receptor);
+        // Removed custom validations - AFIP validates everything
         
         $docType = $this->getAfipDocType($receptor);
         // Obtener concepto desde configuración
@@ -345,8 +318,9 @@ class AfipInvoiceService
             }
         }
         
-        // Para consumidores finales sin CUIT, usar DocNro = 0
-        if ($condicionIva == 5 && (empty($docNro) || strlen($docNro) != 11)) {
+        // Para consumidores finales, siempre usar DocNro = 0 (AFIP requirement for Factura B/C)
+        // CF no se identifica con CUIT en Factura B/C, aunque lo tenga
+        if ($condicionIva == 5) {
             $docNro = '0';
             $docType = 99; // Sin identificar
         }
@@ -456,106 +430,7 @@ class AfipInvoiceService
         return (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
     }
     
-    /**
-     * Validate issuer's tax condition allows emitting this voucher type (CRITICAL)
-     */
-    private function validateIssuerTaxCondition(int $invoiceType): void
-    {
-        $issuerTaxCondition = $this->company->tax_condition ?? 'registered_taxpayer';
-        
-        // Tipos A (1, 2, 3, etc.) - Solo Responsables Inscriptos
-        $tiposA = [1, 2, 3, 4, 5, 39, 40, 60, 61, 63, 64, 201, 202, 203, 206, 207, 208, 211, 212, 213];
-        
-        // Tipos B (6, 7, 8, etc.) - Solo Responsables Inscriptos
-        $tiposB = [6, 7, 8, 9, 10];
-        
-        // Tipos C (11, 12, 13, etc.) - Responsables Inscriptos, Monotributo, Exento
-        $tiposC = [11, 12, 13, 15, 49, 51, 52, 53];
-        
-        // Tipos M (51, 52, 53) - Solo Monotributo
-        $tiposM = [51, 52, 53];
-        
-        if (in_array($invoiceType, $tiposA) || in_array($invoiceType, $tiposB)) {
-            if ($issuerTaxCondition !== 'registered_taxpayer') {
-                $typeName = in_array($invoiceType, $tiposA) ? 'A' : 'B';
-                throw new \Exception(
-                    "No podés emitir comprobantes tipo {$typeName}. "
-                    . "Solo los Responsables Inscriptos pueden emitir Facturas A y B. "
-                    . "Tu condición frente al IVA es: " . $this->getTaxConditionName($issuerTaxCondition) . ". "
-                    . "Actualizá tu perfil fiscal en Configuración."
-                );
-            }
-        }
-        
-        if (in_array($invoiceType, $tiposM)) {
-            if ($issuerTaxCondition !== 'monotax') {
-                throw new \Exception(
-                    "No podés emitir comprobantes tipo M. "
-                    . "Solo los Monotributistas pueden emitir Facturas M. "
-                    . "Tu condición frente al IVA es: " . $this->getTaxConditionName($issuerTaxCondition) . ". "
-                    . "Actualizá tu perfil fiscal en Configuración."
-                );
-            }
-        }
-        
-        if ($issuerTaxCondition === 'final_consumer') {
-            throw new \Exception(
-                "Los Consumidores Finales no pueden emitir facturas electrónicas. "
-                . "Debés estar inscripto como Responsable Inscripto o Monotributista. "
-                . "Actualizá tu perfil fiscal en Configuración."
-            );
-        }
-    }
-    
-    /**
-     * Get human-readable tax condition name
-     */
-    private function getTaxConditionName(string $condition): string
-    {
-        $names = [
-            'registered_taxpayer' => 'Responsable Inscripto',
-            'monotax' => 'Monotributo',
-            'exempt' => 'Exento',
-            'final_consumer' => 'Consumidor Final',
-        ];
-        return $names[$condition] ?? $condition;
-    }
-    
-    /**
-     * Validate invoice type compatibility with receptor's IVA condition (RG 5616)
-     */
-    private function validateInvoiceTypeCompatibility(int $invoiceType, int $condicionIva, $client): void
-    {
-        $typeNames = [
-            1 => 'Factura A', 6 => 'Factura B', 11 => 'Factura C',
-            2 => 'Nota de Débito A', 8 => 'Nota de Débito B',
-            3 => 'Nota de Crédito A', 9 => 'Nota de Crédito B'
-        ];
-        
-        $condNames = [
-            1 => 'Responsable Inscripto',
-            4 => 'Exento',
-            5 => 'Consumidor Final',
-            6 => 'Monotributo'
-        ];
-        
-        Log::info('Validating invoice type compatibility', [
-            'invoice_type' => $invoiceType,
-            'condicion_iva' => $condicionIva,
-            'client_type' => get_class($client),
-            'client_id' => $client->id ?? 'unknown',
-        ]);
-        
-        // Facturas/NC/ND tipo A solo para Responsables Inscriptos
-        $tiposA = [1, 2, 3];
-        if (in_array($invoiceType, $tiposA) && $condicionIva != 1) {
-            throw new \Exception(
-                "No se puede emitir {$typeNames[$invoiceType]} a un cliente {$condNames[$condicionIva]}. "
-                . "Los comprobantes tipo A solo pueden emitirse a Responsables Inscriptos. "
-                . "Utilizá Factura B para este cliente."
-            );
-        }
-    }
+
 
     /**
      * Determine which AFIP Web Service to use based on voucher type

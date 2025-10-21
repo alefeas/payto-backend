@@ -59,8 +59,8 @@ class ClientController extends Controller
         $this->authorize('create', [Client::class, $company]);
 
         $validated = $request->validate([
-            'document_type' => 'required|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => ['required', 'string', new \App\Rules\ValidNationalId()],
+            'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
+            'document_number' => ['nullable', 'string', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string',
             'first_name' => 'nullable|string',
             'last_name' => 'nullable|string',
@@ -69,6 +69,11 @@ class ClientController extends Controller
             'address' => 'nullable|string',
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
+        
+        // Require document for non-final_consumer
+        if ($validated['tax_condition'] !== 'final_consumer' && empty($validated['document_number'])) {
+            return $this->error('Document number is required for this tax condition', 422);
+        }
 
         if (empty($validated['email']) && empty($validated['phone'])) {
             return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
@@ -106,8 +111,8 @@ class ClientController extends Controller
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
         $validated = $request->validate([
-            'document_type' => 'sometimes|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'document_number' => ['sometimes', 'string', new \App\Rules\ValidNationalId()],
+            'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
+            'document_number' => ['nullable', 'string', new \App\Rules\ValidNationalId()],
             'business_name' => 'nullable|string',
             'first_name' => 'nullable|string',
             'last_name' => 'nullable|string',
@@ -116,6 +121,13 @@ class ClientController extends Controller
             'address' => 'nullable|string',
             'tax_condition' => 'sometimes|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
+        
+        // Require document for non-final_consumer
+        $taxCondition = $validated['tax_condition'] ?? $client->tax_condition;
+        $docNumber = $validated['document_number'] ?? $client->document_number;
+        if ($taxCondition !== 'final_consumer' && empty($docNumber)) {
+            return $this->error('Document number is required for this tax condition', 422);
+        }
 
         $email = $validated['email'] ?? $client->email;
         $phone = $validated['phone'] ?? $client->phone;

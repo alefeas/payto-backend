@@ -68,58 +68,8 @@ return [
     ],
 
     // Mensajes de error personalizados para códigos de AFIP
-    'error_messages' => [
-        '10013' => [
-            'title' => 'Tipo de documento incorrecto',
-            'message' => 'El tipo de documento del receptor no coincide con el tipo de comprobante seleccionado',
-            'solution' => 'Verifique que el tipo de documento del receptor sea correcto para este comprobante',
-        ],
-        '10016' => [
-            'title' => 'Comprobante no válido para este receptor',
-            'message' => 'No puede emitir este tipo de comprobante a este receptor según su condición fiscal',
-            'solution' => 'Verifique la condición fiscal del receptor y seleccione el tipo de comprobante correcto',
-        ],
-        '10017' => [
-            'title' => 'Condición fiscal incompatible',
-            'message' => 'La condición fiscal del emisor no permite emitir este tipo de comprobante',
-            'solution' => 'Verifique su condición fiscal y los tipos de comprobante que puede emitir',
-        ],
-        '10018' => [
-            'title' => 'Punto de venta inválido',
-            'message' => 'El punto de venta especificado no es válido o no está autorizado',
-            'solution' => 'Verifique que el punto de venta esté correctamente configurado en AFIP',
-        ],
-        '10019' => [
-            'title' => 'Número de comprobante duplicado',
-            'message' => 'Ya existe un comprobante con este número para este punto de venta',
-            'solution' => 'Verifique el último número de comprobante emitido',
-        ],
-        '10020' => [
-            'title' => 'Fecha de comprobante inválida',
-            'message' => 'La fecha del comprobante no es válida o está fuera del rango permitido',
-            'solution' => 'Verifique que la fecha del comprobante sea correcta y esté dentro del período permitido',
-        ],
-        '10021' => [
-            'title' => 'CUIT inválido',
-            'message' => 'El CUIT del receptor no es válido o no existe en el padrón de AFIP',
-            'solution' => 'Verifique que el CUIT del receptor sea correcto',
-        ],
-        '10022' => [
-            'title' => 'Importe inválido',
-            'message' => 'El importe del comprobante no es válido',
-            'solution' => 'Verifique que los importes sean correctos y mayores a cero',
-        ],
-        '10023' => [
-            'title' => 'Concepto inválido',
-            'message' => 'El concepto del comprobante no es válido',
-            'solution' => 'Seleccione un concepto válido: Productos (1), Servicios (2) o Productos y Servicios (3)',
-        ],
-        '10024' => [
-            'title' => 'Fechas de servicio requeridas',
-            'message' => 'Las fechas de servicio son obligatorias para este concepto',
-            'solution' => 'Complete las fechas de inicio y fin del servicio',
-        ],
-    ],
+    // REMOVED: AFIP's original messages are more accurate
+    'error_messages' => [],
 
     // Mensajes de validación personalizados (Laravel validation)
     'validation_messages' => [
