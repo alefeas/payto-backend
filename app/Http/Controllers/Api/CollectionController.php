@@ -12,7 +12,7 @@ class CollectionController extends Controller
 {
     public function index(Request $request, $companyId)
     {
-        $query = Collection::with(['invoice.client', 'registeredBy', 'confirmedBy'])
+        $query = Collection::with(['invoice.client', 'invoice.receiverCompany', 'registeredBy', 'confirmedBy'])
             ->where('company_id', $companyId);
 
         if ($request->has('status')) {
@@ -24,8 +24,45 @@ class CollectionController extends Controller
         }
 
         $collections = $query->orderBy('collection_date', 'desc')->get();
+        
+        // Format collections to ensure proper data structure
+        $formatted = $collections->map(function($collection) {
+            $data = $collection->toArray();
+            
+            if ($collection->invoice) {
+                $data['invoice'] = [
+                    'id' => $collection->invoice->id,
+                    'type' => $collection->invoice->type,
+                    'sales_point' => $collection->invoice->sales_point,
+                    'voucher_number' => $collection->invoice->voucher_number,
+                ];
+                
+                if ($collection->invoice->client) {
+                    $data['invoice']['client'] = [
+                        'id' => $collection->invoice->client->id,
+                        'business_name' => $collection->invoice->client->business_name,
+                        'first_name' => $collection->invoice->client->first_name,
+                        'last_name' => $collection->invoice->client->last_name,
+                    ];
+                } else {
+                    $data['invoice']['client'] = null;
+                }
+                
+                if ($collection->invoice->receiverCompany) {
+                    $data['invoice']['receiverCompany'] = [
+                        'id' => $collection->invoice->receiverCompany->id,
+                        'business_name' => $collection->invoice->receiverCompany->business_name,
+                        'name' => $collection->invoice->receiverCompany->name,
+                    ];
+                } else {
+                    $data['invoice']['receiverCompany'] = null;
+                }
+            }
+            
+            return $data;
+        });
 
-        return response()->json($collections);
+        return response()->json($formatted);
     }
 
     public function store(Request $request, $companyId)

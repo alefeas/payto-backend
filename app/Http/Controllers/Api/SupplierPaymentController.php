@@ -143,26 +143,33 @@ class SupplierPaymentController extends Controller
                                        : $supplier->name ?? 'Sin nombre');
                 }
                 
+                $invoiceData = [
+                    'id' => $payment->invoice->id,
+                    'type' => $payment->invoice->type,
+                    'sales_point' => $payment->invoice->sales_point,
+                    'voucher_number' => $payment->invoice->voucher_number,
+                ];
+                
+                if ($payment->invoice->supplier) {
+                    $invoiceData['supplier'] = [
+                        'business_name' => $payment->invoice->supplier->business_name,
+                        'first_name' => $payment->invoice->supplier->first_name,
+                        'last_name' => $payment->invoice->supplier->last_name,
+                    ];
+                }
+                
+                if ($payment->invoice->issuerCompany) {
+                    $invoiceData['issuerCompany'] = [
+                        'business_name' => $payment->invoice->issuerCompany->business_name,
+                        'name' => $payment->invoice->issuerCompany->name,
+                    ];
+                }
+                
                 return [
                     'id' => $payment->id,
                     'invoice_id' => $payment->invoice_id,
-                    'invoice' => [
-                        'id' => $payment->invoice->id,
-                        'type' => $payment->invoice->type,
-                        'sales_point' => $payment->invoice->sales_point,
-                        'voucher_number' => $payment->invoice->voucher_number,
-                        'supplier' => [
-                            'business_name' => $supplierName,
-                        ],
-                        'issuerCompany' => $payment->invoice->issuerCompany ? [
-                            'business_name' => $payment->invoice->issuerCompany->business_name ?? $payment->invoice->issuerCompany->name,
-                        ] : null,
-                    ],
+                    'invoice' => $invoiceData,
                     'voucher_number' => $payment->invoice->voucher_number,
-                    'supplier' => [
-                        'id' => $supplier->id ?? null,
-                        'name' => $supplierName,
-                    ],
                     'amount' => $payment->amount,
                     'retentions' => $payment->retentions->map(fn($r) => [
                         'type' => $r->type,

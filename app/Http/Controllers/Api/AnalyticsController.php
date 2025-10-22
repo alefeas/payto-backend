@@ -199,11 +199,26 @@ class AnalyticsController extends Controller
                 ->where('status', 'approved')
                 ->count();
 
-            // Badge "Aprobar Facturas": Facturas recibidas (receiver) de proveedores externos (supplier_id) pending_approval
-            // Son facturas de proveedores que aún no aprobé
+            // Badge "Aprobar Facturas": Facturas recibidas que necesitan aprobación
+            // Incluye facturas de empresas conectadas (status=issued) y proveedores externos (status=pending_approval)
+            $company = \App\Models\Company::findOrFail($companyId);
             $pendingApprovals = Invoice::where('receiver_company_id', $companyId)
-                ->whereNotNull('supplier_id')
-                ->where('status', 'pending_approval')
+                ->where(function($q) use ($company) {
+                    // Facturas de empresas conectadas con status=issued que requieren aprobación
+                    $q->where(function($sub) use ($company) {
+                        $sub->where('status', 'issued')
+                            ->where('receiver_company_id', $company->id)
+                            ->where(function($check) {
+                                $check->whereNotNull('issuer_company_id')
+                                      ->where('issuer_company_id', '!=', DB::raw('receiver_company_id'));
+                            });
+                    })
+                    // O facturas de proveedores externos con status=pending_approval
+                    ->orWhere(function($sub) {
+                        $sub->where('status', 'pending_approval')
+                            ->whereNotNull('supplier_id');
+                    });
+                })
                 ->count();
 
             return response()->json([

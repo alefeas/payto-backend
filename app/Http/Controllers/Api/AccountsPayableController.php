@@ -20,7 +20,7 @@ class AccountsPayableController extends Controller
             // Obtener todas las facturas recibidas APROBADAS (no pagadas) con pagos
             $allInvoices = Invoice::where('receiver_company_id', $companyId)
                 ->where('status', 'approved')
-                ->with(['issuerCompany', 'supplier', 'payments'])
+                ->with(['issuerCompany', 'supplier.company', 'payments'])
                 ->get();
         
             // Calcular paid_amount desde payments
@@ -40,18 +40,24 @@ class AccountsPayableController extends Controller
                     return $inv->due_date < $today && $inv->pending_amount > 0;
                 })
                 ->map(function($inv) {
-                    $supplierName = 'Proveedor desconocido';
+                    $supplierName = null;
                     if ($inv->supplier) {
-                        $supplierName = $inv->supplier->business_name ?? $inv->supplier->name ?? 'Sin nombre';
-                    } elseif ($inv->issuerCompany) {
-                        $supplierName = $inv->issuerCompany->business_name ?? $inv->issuerCompany->name ?? 'Sin nombre';
+                        $supplierName = $inv->supplier->business_name 
+                            ?? ($inv->supplier->first_name && $inv->supplier->last_name 
+                                ? trim($inv->supplier->first_name . ' ' . $inv->supplier->last_name) 
+                                : null);
                     }
+                    if (!$supplierName && $inv->issuerCompany) {
+                        $supplierName = $inv->issuerCompany->business_name ?? $inv->issuerCompany->name;
+                    }
+                    $supplierName = $supplierName ?? 'Sin nombre';
                     
                     return [
                         'id' => $inv->id,
                         'supplier' => $supplierName,
-                        'voucher_number' => $inv->voucher_number ?? 'S/N',
+                        'voucher_number' => ($inv->type ?? 'FC') . ' ' . str_pad($inv->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($inv->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
                         'due_date' => $inv->due_date,
+                        'issue_date' => $inv->issue_date,
                         'days_overdue' => Carbon::parse($inv->due_date)->diffInDays(Carbon::today()),
                         'pending_amount' => $inv->pending_amount,
                     ];
@@ -66,18 +72,24 @@ class AccountsPayableController extends Controller
                 })
                 ->sortBy('due_date')
                 ->map(function($inv) {
-                    $supplierName = 'Proveedor desconocido';
+                    $supplierName = null;
                     if ($inv->supplier) {
-                        $supplierName = $inv->supplier->business_name ?? $inv->supplier->name ?? 'Sin nombre';
-                    } elseif ($inv->issuerCompany) {
-                        $supplierName = $inv->issuerCompany->business_name ?? $inv->issuerCompany->name ?? 'Sin nombre';
+                        $supplierName = $inv->supplier->business_name 
+                            ?? ($inv->supplier->first_name && $inv->supplier->last_name 
+                                ? trim($inv->supplier->first_name . ' ' . $inv->supplier->last_name) 
+                                : null);
                     }
+                    if (!$supplierName && $inv->issuerCompany) {
+                        $supplierName = $inv->issuerCompany->business_name ?? $inv->issuerCompany->name;
+                    }
+                    $supplierName = $supplierName ?? 'Sin nombre';
                     
                     return [
                         'id' => $inv->id,
                         'supplier' => $supplierName,
-                        'voucher_number' => $inv->voucher_number ?? 'S/N',
+                        'voucher_number' => ($inv->type ?? 'FC') . ' ' . str_pad($inv->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($inv->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
                         'due_date' => $inv->due_date,
+                        'issue_date' => $inv->issue_date,
                         'days_until_due' => Carbon::today()->diffInDays(Carbon::parse($inv->due_date)),
                         'pending_amount' => $inv->pending_amount,
                     ];
@@ -98,13 +110,18 @@ class AccountsPayableController extends Controller
                 })
                 ->map(function($invoices, $supplierId) {
                     $first = $invoices->first();
-                    $supplierName = 'Proveedor eliminado';
+                    $supplierName = null;
                     
                     if ($first->supplier) {
-                        $supplierName = $first->supplier->business_name ?? $first->supplier->name ?? 'Sin nombre';
-                    } elseif ($first->issuerCompany) {
-                        $supplierName = $first->issuerCompany->business_name ?? $first->issuerCompany->name ?? 'Sin nombre';
+                        $supplierName = $first->supplier->business_name 
+                            ?? ($first->supplier->first_name && $first->supplier->last_name 
+                                ? trim($first->supplier->first_name . ' ' . $first->supplier->last_name) 
+                                : null);
                     }
+                    if (!$supplierName && $first->issuerCompany) {
+                        $supplierName = $first->issuerCompany->business_name ?? $first->issuerCompany->name;
+                    }
+                    $supplierName = $supplierName ?? 'Sin nombre';
                     
                     return [
                         'supplier_id' => $supplierId,
@@ -178,7 +195,7 @@ class AccountsPayableController extends Controller
         try {
             $query = Invoice::where('receiver_company_id', $companyId)
                 ->where('status', 'approved')
-                ->with(['issuerCompany', 'supplier', 'payments']);
+                ->with(['issuerCompany', 'supplier.company', 'payments']);
         
             // Filtros
             if ($request->has('supplier_id')) {
@@ -256,10 +273,10 @@ class AccountsPayableController extends Controller
             $total = $invoices->count();
             $invoices = $invoices->slice(($page - 1) * $perPage, $perPage)->values();
             
-            // Ensure supplier bank data is included in response
+            // Ensure supplier and issuerCompany data is included in response
             $invoicesArray = $invoices->map(function($invoice) {
                 $data = $invoice->toArray();
-                // Explicitly include supplier bank data if exists
+                // Explicitly include supplier data if exists
                 if ($invoice->supplier) {
                     $data['supplier'] = [
                         'id' => $invoice->supplier->id,
@@ -273,6 +290,15 @@ class AccountsPayableController extends Controller
                         'bank_account_number' => $invoice->supplier->bank_account_number,
                         'bank_account_type' => $invoice->supplier->bank_account_type,
                         'bank_alias' => $invoice->supplier->bank_alias,
+                    ];
+                }
+                // Explicitly include issuerCompany data if exists
+                if ($invoice->issuerCompany) {
+                    $data['issuerCompany'] = [
+                        'id' => $invoice->issuerCompany->id,
+                        'business_name' => $invoice->issuerCompany->business_name,
+                        'name' => $invoice->issuerCompany->name,
+                        'national_id' => $invoice->issuerCompany->national_id,
                     ];
                 }
                 return $data;
