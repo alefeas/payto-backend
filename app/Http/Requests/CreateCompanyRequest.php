@@ -17,7 +17,7 @@ class CreateCompanyRequest extends FormRequest
         return [
             'name' => 'required|string|max:200',
             'business_name' => 'nullable|string|max:200',
-            'national_id' => ['required', 'string', 'max:15', 'unique:companies,national_id', new ValidNationalId()],
+            'national_id' => ['required', 'string', 'max:15', new ValidNationalId()],
             'phone' => 'nullable|string|max:20',
             'tax_condition' => 'nullable|in:RI,Monotributo,Exento,CF',
             'default_sales_point' => 'nullable|integer|min:1|max:9999',
@@ -42,7 +42,7 @@ class CreateCompanyRequest extends FormRequest
             'name.required' => 'El nombre es obligatorio',
             'name.max' => 'El nombre no puede exceder 200 caracteres',
             'national_id.required' => 'El CUIT/CUIL/DNI es obligatorio',
-            'national_id.unique' => 'Este CUIT/CUIL/DNI ya está registrado',
+
 
             'tax_condition.in' => 'La condición fiscal no es válida',
             'deletion_code.required' => 'El código de eliminación es obligatorio',

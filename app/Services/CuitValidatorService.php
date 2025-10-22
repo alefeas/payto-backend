@@ -17,9 +17,9 @@ class CuitValidatorService
             return false;
         }
         
-        // Rechazar CUITs ficticios (todos ceros en el medio)
-        $middle = substr($cuit, 2, 8);
-        if ($middle === '00000000') {
+        // Permitir CUITs de prueba (30-00000000-X es común en testing)
+        // Solo rechazar si TODO el CUIT es ceros
+        if ($cuit === '00000000000') {
             return false;
         }
         

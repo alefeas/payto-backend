@@ -92,7 +92,7 @@ class CompanyConnectionController extends Controller
                 'connectedCompanyId' => $connectedCompanyId,
                 'connectedCompanyName' => $connectedCompany->name,
                 'connectedCompanyUniqueId' => $connectedCompany->unique_id,
-                'connectedCompanyCuit' => $connectedCompany->cuit,
+                'connectedCompanyCuit' => $connectedCompany->national_id,
                 'connectedCompanyTaxCondition' => $connectedCompany->tax_condition,
                 'status' => 'connected',
                 'requestedAt' => $connection->created_at,
@@ -316,7 +316,7 @@ class CompanyConnectionController extends Controller
             if ($invoicesSent) {
                 $client = $company->clients()->create([
                     'document_type' => 'CUIT',
-                    'document_number' => $otherCompany->cuit,
+                    'document_number' => $otherCompany->national_id,
                     'business_name' => $otherCompany->name,
                     'tax_condition' => $otherCompany->tax_condition,
                     'email' => null,
@@ -336,7 +336,7 @@ class CompanyConnectionController extends Controller
             if ($invoicesReceived) {
                 $supplier = $company->suppliers()->create([
                     'document_type' => 'CUIT',
-                    'document_number' => $otherCompany->cuit,
+                    'document_number' => $otherCompany->national_id,
                     'business_name' => $otherCompany->name,
                     'tax_condition' => $otherCompany->tax_condition,
                     'email' => null,

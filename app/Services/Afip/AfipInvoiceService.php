@@ -262,7 +262,14 @@ class AfipInvoiceService
         $condicionIva = $this->getAfipCondicionIva($receptor);
         $invoiceType = $this->getAfipInvoiceType($invoice->type);
         
-        // Removed custom validations - AFIP validates everything
+        // Validar que Consumidor Final no reciba Factura A o M (AFIP error 10243)
+        $tiposAyM = [1, 2, 3, 4, 5, 51, 52, 53, 201, 202, 203, 206, 207, 208, 211, 212, 213];
+        if ($condicionIva == 5 && in_array($invoiceType, $tiposAyM)) {
+            throw new \Exception(
+                'No se puede emitir Factura A o M a un Consumidor Final. '
+                . 'Debe emitir Factura B o C según corresponda.'
+            );
+        }
         
         $docType = $this->getAfipDocType($receptor);
         // Obtener concepto desde configuración
@@ -295,7 +302,10 @@ class AfipInvoiceService
         // Factura C: IVA incluido, no se discrimina
         $isTipoC = in_array($invoiceType, [11, 13, 12, 15]); // Factura C, NC C, ND C, Recibo C
         
-        $docNro = $this->cleanDocumentNumber($receptor->document_number ?? $receptor->cuit ?? '0');
+        // Para empresas (Company), usar national_id; para clientes/suppliers, usar document_number
+        $docNro = $this->cleanDocumentNumber(
+            $receptor->document_number ?? $receptor->national_id ?? $receptor->cuit ?? '0'
+        );
         
         // Validar CUIT para Facturas A y M (AFIP exige DocTipo=80 y CUIT válido)
         $tiposAyM = [1, 2, 3, 4, 5, 39, 40, 51, 52, 53, 60, 61, 63, 64, 201, 202, 203, 206, 207, 208, 211, 212, 213];
@@ -473,6 +483,11 @@ class AfipInvoiceService
      */
     private function getAfipDocType($client): int
     {
+        // Si es una empresa (Company), siempre es CUIT
+        if ($client instanceof \App\Models\Company) {
+            return 80; // CUIT
+        }
+        
         $docType = $client->document_type ?? 'DNI';
         
         $types = [

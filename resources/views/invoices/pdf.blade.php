@@ -52,7 +52,7 @@
     <div class="client-info">
         <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 13px;">Datos del Cliente</h4>
         <p style="margin: 5px 0;"><strong>Razón Social:</strong> {{ $client->business_name ?? $client->name ?? ($client->first_name . ' ' . $client->last_name) }}</p>
-        <p style="margin: 5px 0;"><strong>CUIT/DNI:</strong> {{ $client->document_number ?? $client->national_id }}</p>
+        <p style="margin: 5px 0;"><strong>{{ ($client->tax_condition ?? '') === 'final_consumer' ? 'DNI' : 'CUIT' }}:</strong> {{ $client->document_number ?? $client->national_id }}</p>
         <p style="margin: 5px 0;"><strong>Condición IVA:</strong> 
         @php
             $taxConditions = [

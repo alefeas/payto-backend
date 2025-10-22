@@ -27,7 +27,7 @@ class InvoiceController extends Controller
                 $q->where('issuer_company_id', $companyId)
                   ->orWhere('receiver_company_id', $companyId);
             })
-            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user']);
+            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice']);
 
         if ($status) {
             $query->where('status', $status);
@@ -45,6 +45,20 @@ class InvoiceController extends Controller
             
             // Agregar campo de dirección para facilitar filtrado en frontend
             $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
+            
+            // Agregar receiver_name y receiver_document
+            if ($invoice->receiverCompany) {
+                $invoice->receiver_name = $invoice->receiverCompany->name;
+                $invoice->receiver_document = $invoice->receiverCompany->national_id;
+            } elseif ($invoice->client) {
+                $invoice->receiver_name = $invoice->client->business_name 
+                    ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
+                    ?: null;
+                $invoice->receiver_document = $invoice->client->document_number;
+            } else {
+                $invoice->receiver_name = null;
+                $invoice->receiver_document = null;
+            }
             
             // Format approvals for frontend
             if ($invoice->approvals && $invoice->approvals->count() > 0) {
@@ -234,6 +248,26 @@ class InvoiceController extends Controller
                 ], 422);
             }
 
+            // Determinar receptor
+            $receiverCompanyId = $validated['receiver_company_id'] ?? null;
+            $clientId = $validated['client_id'] ?? null;
+            
+            // Obtener datos del receptor para guardar en la factura
+            $receiverName = null;
+            $receiverDocument = null;
+            
+            if ($receiverCompanyId) {
+                $receiverCompany = Company::findOrFail($receiverCompanyId);
+                $receiverName = $receiverCompany->name;
+                $receiverDocument = $receiverCompany->national_id;
+            } elseif ($clientId) {
+                $client = \App\Models\Client::findOrFail($clientId);
+                $receiverName = $client->business_name 
+                    ?? trim($client->first_name . ' ' . $client->last_name)
+                    ?: null;
+                $receiverDocument = $client->document_number;
+            }
+            
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
                 'type' => $invoiceType,
@@ -243,8 +277,10 @@ class InvoiceController extends Controller
                 'service_date_from' => $validated['service_date_from'] ?? null,
                 'service_date_to' => $validated['service_date_to'] ?? null,
                 'issuer_company_id' => $companyId,
-                'receiver_company_id' => $validated['receiver_company_id'] ?? null,
-                'client_id' => $validated['client_id'] ?? null,
+                'receiver_company_id' => $receiverCompanyId,
+                'client_id' => $clientId,
+                'receiver_name' => $receiverName,
+                'receiver_document' => $receiverDocument,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),
                 'subtotal' => $subtotal,
@@ -256,7 +292,7 @@ class InvoiceController extends Controller
                 'notes' => $validated['notes'] ?? null,
                 'status' => 'pending_approval',
                 'afip_status' => 'pending',
-                'approvals_required' => 0, // Set based on company settings
+                'approvals_required' => 0,
                 'approvals_received' => 0,
                 'created_by' => auth()->id(),
             ]);
@@ -351,7 +387,7 @@ class InvoiceController extends Controller
 
             return response()->json([
                 'message' => 'Factura autorizada por AFIP exitosamente',
-                'invoice' => $invoice->load(['client', 'items', 'perceptions']),
+                'invoice' => $invoice->load(['client', 'receiverCompany', 'items', 'perceptions']),
             ], 201);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -580,6 +616,26 @@ class InvoiceController extends Controller
                 ]);
                 
                 if (!$exists) {
+                    // Buscar receptor por CUIT
+                    $receiverCompanyId = null;
+                    $clientId = null;
+                    
+                    if (isset($afipData['doc_number']) && $afipData['doc_number'] != '0') {
+                        // Buscar empresa conectada primero
+                        $receiverCompany = Company::where('national_id', $afipData['doc_number'])->first();
+                        if ($receiverCompany) {
+                            $receiverCompanyId = $receiverCompany->id;
+                        } else {
+                            // Buscar cliente existente
+                            $client = \App\Models\Client::where('company_id', $company->id)
+                                ->where('document_number', $afipData['doc_number'])
+                                ->first();
+                            if ($client) {
+                                $clientId = $client->id;
+                            }
+                        }
+                    }
+                    
                     Invoice::create([
                         'number' => $formattedNumber,
                         'type' => $invoiceType,
@@ -587,6 +643,8 @@ class InvoiceController extends Controller
                         'voucher_number' => $validated['invoice_number'],
                         'concept' => 'products',
                         'issuer_company_id' => $company->id,
+                        'receiver_company_id' => $receiverCompanyId,
+                        'client_id' => $clientId,
                         'issue_date' => $afipData['issue_date'],
                         'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30)->format('Y-m-d'),
                         'subtotal' => $afipData['subtotal'],
