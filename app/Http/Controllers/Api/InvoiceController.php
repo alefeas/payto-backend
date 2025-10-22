@@ -46,18 +46,24 @@ class InvoiceController extends Controller
             // Agregar campo de dirección para facilitar filtrado en frontend
             $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
             
-            // Agregar receiver_name y receiver_document
-            if ($invoice->receiverCompany) {
-                $invoice->receiver_name = $invoice->receiverCompany->name;
-                $invoice->receiver_document = $invoice->receiverCompany->national_id;
-            } elseif ($invoice->client) {
-                $invoice->receiver_name = $invoice->client->business_name 
-                    ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
-                    ?: null;
-                $invoice->receiver_document = $invoice->client->document_number;
+            // Para facturas recibidas, cambiar el estado a pending_approval si corresponde
+            if ($invoice->direction === 'received' && $invoice->status === 'issued') {
+                $invoice->display_status = $company->required_approvals > 0 ? 'pending_approval' : 'approved';
             } else {
-                $invoice->receiver_name = null;
-                $invoice->receiver_document = null;
+                $invoice->display_status = $invoice->status;
+            }
+            
+            // Solo agregar receiver_name y receiver_document si no están ya guardados
+            if (!$invoice->receiver_name || !$invoice->receiver_document) {
+                if ($invoice->receiverCompany) {
+                    $invoice->receiver_name = $invoice->receiverCompany->name;
+                    $invoice->receiver_document = $invoice->receiverCompany->national_id;
+                } elseif ($invoice->client) {
+                    $invoice->receiver_name = $invoice->client->business_name 
+                        ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
+                        ?: null;
+                    $invoice->receiver_document = $invoice->client->document_number;
+                }
             }
             
             // Format approvals for frontend
@@ -409,11 +415,35 @@ class InvoiceController extends Controller
 
     public function show($companyId, $id)
     {
-        $invoice = Invoice::where('issuer_company_id', $companyId)
-            ->with(['client', 'items', 'receiverCompany'])
+        $company = Company::findOrFail($companyId);
+        
+        $invoice = Invoice::where(function($q) use ($companyId) {
+                $q->where('issuer_company_id', $companyId)
+                  ->orWhere('receiver_company_id', $companyId);
+            })
+            ->with(['client', 'items', 'receiverCompany', 'issuerCompany'])
             ->findOrFail($id);
 
         $this->authorize('view', $invoice);
+        
+        $invoice->direction = $invoice->issuer_company_id === (int)$companyId ? 'issued' : 'received';
+        if ($invoice->direction === 'received' && $invoice->status === 'issued') {
+            $invoice->display_status = $company->required_approvals > 0 ? 'pending_approval' : 'approved';
+        } else {
+            $invoice->display_status = $invoice->status;
+        }
+        
+        if (!$invoice->receiver_name || !$invoice->receiver_document) {
+            if ($invoice->receiverCompany) {
+                $invoice->receiver_name = $invoice->receiverCompany->name;
+                $invoice->receiver_document = $invoice->receiverCompany->national_id;
+            } elseif ($invoice->client) {
+                $invoice->receiver_name = $invoice->client->business_name 
+                    ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
+                    ?: null;
+                $invoice->receiver_document = $invoice->client->document_number;
+            }
+        }
 
         return response()->json($invoice);
     }

@@ -24,16 +24,21 @@ class InvoicePolicy
 
     public function view(User $user, Invoice $invoice): bool
     {
-        $member = $invoice->issuerCompany->members()->where('user_id', $user->id)->first();
+        // Verificar si es miembro de la empresa emisora
+        $issuerMember = $invoice->issuerCompany->members()->where('user_id', $user->id)->first();
+        if ($issuerMember && in_array($issuerMember->role, ['owner', 'administrator', 'financial_director', 'accountant', 'approver', 'operator'])) {
+            return true;
+        }
         
-        return $member && in_array($member->role, [
-            'owner',
-            'administrator',
-            'financial_director',
-            'accountant',
-            'approver',
-            'operator',
-        ]);
+        // Verificar si es miembro de la empresa receptora
+        if ($invoice->receiverCompany) {
+            $receiverMember = $invoice->receiverCompany->members()->where('user_id', $user->id)->first();
+            if ($receiverMember && in_array($receiverMember->role, ['owner', 'administrator', 'financial_director', 'accountant', 'approver', 'operator'])) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     public function create(User $user, Company $company): bool
