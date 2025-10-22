@@ -42,6 +42,7 @@ class Invoice extends Model
         'total_perceptions',
         'total',
         'status',
+        'company_statuses',
         'approvals_required',
         'approvals_received',
         'approval_date',
@@ -90,6 +91,7 @@ class Invoice extends Model
         'requires_correction' => 'boolean',
         'dispute_opened' => 'boolean',
         'transport_data' => 'array',
+        'company_statuses' => 'array',
     ];
 
     protected $appends = ['pending_amount'];

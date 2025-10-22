@@ -42,6 +42,17 @@ class InvoiceController extends Controller
             } elseif ($status === 'paid') {
                 $query->where('receiver_company_id', $companyId)
                       ->where('status', 'paid');
+            } elseif (in_array($status, ['pending_approval', 'approved', 'rejected'])) {
+                // Para estados de aprobación, filtrar por company_statuses JSON
+                $query->where(function($q) use ($status, $companyId) {
+                    $q->whereRaw("JSON_EXTRACT(company_statuses, '$.\"{$companyId}\"') = ?", [$status])
+                      ->orWhere(function($q2) use ($status, $companyId) {
+                          // Fallback: si no existe en JSON, usar lógica anterior
+                          $q2->whereRaw("JSON_EXTRACT(company_statuses, '$.\"{$companyId}\"') IS NULL")
+                             ->where('receiver_company_id', $companyId)
+                             ->where('status', $status);
+                      });
+                });
             } else {
                 $query->where('status', $status);
             }
@@ -90,7 +101,7 @@ class InvoiceController extends Controller
             $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
             
             // Usar estados por empresa desde JSON
-            $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+            $companyStatuses = $invoice->company_statuses ?: [];
             $companyIdInt = (int)$companyId;
             
             if (isset($companyStatuses[$companyIdInt])) {
@@ -368,7 +379,7 @@ class InvoiceController extends Controller
                 'service_date_from' => $validated['service_date_from'] ?? null,
                 'service_date_to' => $validated['service_date_to'] ?? null,
                 'issuer_company_id' => $companyId,
-                'receiver_company_id' => $receiverCompanyId ?? $companyId,
+                'receiver_company_id' => $receiverCompanyId,
                 'client_id' => $clientId,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),

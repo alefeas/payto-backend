@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\InvoiceApproval;
 use App\Traits\ApiResponse;
@@ -40,18 +41,17 @@ class InvoiceApprovalController extends Controller
         $invoice->refresh();
 
         // Actualizar estado solo para la empresa receptora
-        $company = $invoice->receiverCompany;
+        $company = Company::findOrFail($companyId);
         $requiredApprovals = $company->required_approvals ?? 0;
         
         if ($requiredApprovals === 0 || $invoice->approvals_received >= $requiredApprovals) {
             // Guardar estado en JSON por empresa
-            $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+            $companyStatuses = $invoice->company_statuses ?: [];
             $companyStatuses[(int)$companyId] = 'approved';
             
-            $invoice->update([
-                'company_statuses' => json_encode($companyStatuses),
-                'approval_date' => now(),
-            ]);
+            $invoice->company_statuses = $companyStatuses;
+            $invoice->approval_date = now();
+            $invoice->save();
         }
 
         $invoice->refresh();
@@ -81,15 +81,14 @@ class InvoiceApprovalController extends Controller
         }
 
         // Actualizar estado solo para esta empresa
-        $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+        $companyStatuses = $invoice->company_statuses ?: [];
         $companyStatuses[(int)$companyId] = 'rejected';
         
-        $invoice->update([
-            'company_statuses' => json_encode($companyStatuses),
-            'rejection_reason' => $request->input('reason'),
-            'rejected_at' => now(),
-            'rejected_by' => $user->id,
-        ]);
+        $invoice->company_statuses = $companyStatuses;
+        $invoice->rejection_reason = $request->input('reason');
+        $invoice->rejected_at = now();
+        $invoice->rejected_by = $user->id;
+        $invoice->save();
 
         return $this->success(null, 'Factura rechazada');
     }
