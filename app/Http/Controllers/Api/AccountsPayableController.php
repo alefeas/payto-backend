@@ -255,10 +255,10 @@ class AccountsPayableController extends Controller
                 $invoice->has_bank_data = $hasBankData;
             });
             
-            // Filtrar facturas completamente pagadas
+            // Filtrar facturas completamente pagadas (pending_amount <= 0)
             $invoices = $invoices->filter(function($inv) {
                 return $inv->pending_amount > 0;
-            });
+            })->values();
             
             // Aplicar filtro de payment_status si existe
             if ($request->has('payment_status')) {

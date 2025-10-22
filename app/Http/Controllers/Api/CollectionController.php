@@ -71,7 +71,7 @@ class CollectionController extends Controller
             'invoice_id' => 'required|exists:invoices,id',
             'amount' => 'required|numeric|min:0',
             'collection_date' => 'required|date',
-            'collection_method' => 'required|in:transfer,check,cash,card',
+            'collection_method' => 'required|in:transfer,check,cash,card,debit_card,credit_card,other',
             'reference_number' => 'nullable|string|max:100',
             'attachment_url' => 'nullable|string|max:500',
             'notes' => 'nullable|string',
@@ -87,16 +87,7 @@ class CollectionController extends Controller
         DB::beginTransaction();
         try {
             $collection = Collection::create($validated);
-
-            // If status is confirmed, update invoice status
-            if ($collection->status === 'confirmed') {
-                $invoice = Invoice::find($validated['invoice_id']);
-                $invoice->status = 'paid';
-                $invoice->save();
-            }
-
             DB::commit();
-
             return response()->json($collection->load(['invoice.client', 'registeredBy']), 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -111,7 +102,7 @@ class CollectionController extends Controller
         $validated = $request->validate([
             'amount' => 'sometimes|numeric|min:0',
             'collection_date' => 'sometimes|date',
-            'collection_method' => 'sometimes|in:transfer,check,cash,card',
+            'collection_method' => 'sometimes|in:transfer,check,cash,card,debit_card,credit_card,other',
             'reference_number' => 'nullable|string|max:100',
             'attachment_url' => 'nullable|string|max:500',
             'notes' => 'nullable|string',
@@ -136,11 +127,6 @@ class CollectionController extends Controller
             $collection->confirmed_by = $request->user()->id;
             $collection->confirmed_at = now();
             $collection->save();
-
-            // Update invoice status to paid
-            $invoice = $collection->invoice;
-            $invoice->status = 'paid';
-            $invoice->save();
 
             DB::commit();
 

@@ -19,7 +19,7 @@ return new class extends Migration
             $table->foreign('invoice_id')->references('id')->on('invoices')->onDelete('cascade');
             $table->decimal('amount', 15, 2);
             $table->date('payment_date');
-            $table->enum('payment_method', ['transfer', 'check', 'cash', 'card']);
+            $table->enum('payment_method', ['transfer', 'check', 'cash', 'card', 'debit_card', 'credit_card', 'other']);
             $table->string('reference_number', 100)->nullable();
             $table->string('attachment_url', 500)->nullable();
             $table->text('notes')->nullable();

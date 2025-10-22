@@ -21,16 +21,64 @@ class InvoiceController extends Controller
         $this->authorize('viewAny', [Invoice::class, $company]);
 
         $status = $request->query('status');
+        $search = $request->query('search');
+        $type = $request->query('type');
+        $client = $request->query('client');
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
         
-        // Obtener TODAS las facturas relacionadas con la empresa (emitidas Y recibidas)
-        $query = Invoice::where(function($q) use ($companyId) {
-                $q->where('issuer_company_id', $companyId)
-                  ->orWhere('receiver_company_id', $companyId);
-            })
-            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice']);
+        // Solo facturas emitidas por esta empresa O recibidas por esta empresa
+        $query = Invoice::where('issuer_company_id', $companyId)
+            ->orWhere('receiver_company_id', $companyId)
+            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice', 'payments', 'collections']);
 
-        if ($status) {
-            $query->where('status', $status);
+        if ($status && $status !== 'all') {
+            if ($status === 'overdue') {
+                $query->whereDate('due_date', '<', now())
+                      ->whereNotIn('status', ['paid', 'cancelled']);
+            } elseif ($status === 'collected') {
+                $query->where('issuer_company_id', $companyId)
+                      ->where('status', 'paid');
+            } elseif ($status === 'paid') {
+                $query->where('receiver_company_id', $companyId)
+                      ->where('status', 'paid');
+            } else {
+                $query->where('status', $status);
+            }
+        }
+        
+        if ($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('number', 'like', '%' . $search . '%')
+                  ->orWhere('receiver_name', 'like', '%' . $search . '%')
+                  ->orWhereHas('client', function($q) use ($search) {
+                      $q->where('business_name', 'like', '%' . $search . '%')
+                        ->orWhere('first_name', 'like', '%' . $search . '%')
+                        ->orWhere('last_name', 'like', '%' . $search . '%');
+                  });
+            });
+        }
+        
+        if ($type && $type !== 'all') {
+            $query->where('type', $type);
+        }
+        
+        if ($client && $client !== 'all') {
+            $query->where(function($q) use ($client) {
+                $q->where('receiver_name', $client)
+                  ->orWhereHas('client', function($q) use ($client) {
+                      $q->where('business_name', $client)
+                        ->orWhereRaw("CONCAT(first_name, ' ', last_name) = ?", [$client]);
+                  });
+            });
+        }
+        
+        if ($dateFrom) {
+            $query->whereDate('issue_date', '>=', $dateFrom);
+        }
+        
+        if ($dateTo) {
+            $query->whereDate('issue_date', '<=', $dateTo);
         }
 
         $invoices = $query->orderBy('created_at', 'desc')
@@ -38,19 +86,55 @@ class InvoiceController extends Controller
         
         // Override approvals_required with current company setting and format approvals
         $invoices->getCollection()->transform(function ($invoice) use ($company, $companyId) {
+
+            $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
+            
+            // Usar estados por empresa desde JSON
+            $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+            $companyIdInt = (int)$companyId;
+            
+            if (isset($companyStatuses[$companyIdInt])) {
+                $invoice->display_status = $companyStatuses[$companyIdInt];
+            } else {
+                // Fallback al status global
+                if ($invoice->direction === 'issued') {
+                    $invoice->display_status = $invoice->status;
+                } else {
+                    $invoice->display_status = $invoice->status === 'issued' 
+                        ? ($company->required_approvals > 0 ? 'pending_approval' : 'approved')
+                        : $invoice->status;
+                }
+            }
+            
+            // Calcular payment_status y pending_amount según dirección
+            $paidAmount = 0;
+            if ($invoice->direction === 'issued') {
+                // Para facturas emitidas, usar collections
+                $paidAmount = $invoice->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
+            } else {
+                // Para facturas recibidas, usar payments
+                $paidAmount = \DB::table('invoice_payments_tracking')
+                    ->where('invoice_id', $invoice->id)
+                    ->where('company_id', $companyId)
+                    ->whereIn('status', ['confirmed', 'in_process'])
+                    ->sum('amount');
+            }
+            
+            $total = $invoice->total ?? 0;
+            $invoice->paid_amount = $paidAmount;
+            $invoice->pending_amount = $total - $paidAmount;
+            
+            if ($paidAmount >= $total) {
+                $invoice->payment_status = 'paid';
+            } elseif ($paidAmount > 0) {
+                $invoice->payment_status = 'partial';
+            } else {
+                $invoice->payment_status = 'pending';
+            }
+            
             // Solo override approvals_required si la empresa es la receptora
             if ($invoice->receiver_company_id === $companyId) {
                 $invoice->approvals_required = $company->required_approvals;
-            }
-            
-            // Agregar campo de dirección para facilitar filtrado en frontend
-            $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
-            
-            // Para facturas recibidas, cambiar el estado a pending_approval si corresponde
-            if ($invoice->direction === 'received' && $invoice->status === 'issued') {
-                $invoice->display_status = $company->required_approvals > 0 ? 'pending_approval' : 'approved';
-            } else {
-                $invoice->display_status = $invoice->status;
             }
             
             // Solo agregar receiver_name y receiver_document si no están ya guardados
@@ -274,6 +358,7 @@ class InvoiceController extends Controller
                 $receiverDocument = $client->document_number;
             }
             
+            // Crear factura para el EMISOR solamente
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
                 'type' => $invoiceType,
@@ -283,10 +368,8 @@ class InvoiceController extends Controller
                 'service_date_from' => $validated['service_date_from'] ?? null,
                 'service_date_to' => $validated['service_date_to'] ?? null,
                 'issuer_company_id' => $companyId,
-                'receiver_company_id' => $receiverCompanyId,
+                'receiver_company_id' => $receiverCompanyId ?? $companyId,
                 'client_id' => $clientId,
-                'receiver_name' => $receiverName,
-                'receiver_document' => $receiverDocument,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),
                 'subtotal' => $subtotal,
@@ -369,6 +452,8 @@ class InvoiceController extends Controller
                     'pdf_url' => $pdfPath,
                     'afip_txt_url' => $txtPath,
                 ]);
+                
+                // NO crear factura duplicada - cada empresa verá la misma factura según su rol
             } catch (\Exception $e) {
                 DB::rollBack();
                 
@@ -485,6 +570,25 @@ class InvoiceController extends Controller
         return response()->json([
             'message' => 'Factura eliminada correctamente',
         ]);
+    }
+
+    public function deleteAll($companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('viewAny', [Invoice::class, $company]);
+
+        DB::beginTransaction();
+        try {
+            Invoice::where('issuer_company_id', $companyId)
+                ->orWhere('receiver_company_id', $companyId)
+                ->delete();
+            
+            DB::commit();
+            return response()->json(['message' => 'Todas las facturas fueron eliminadas']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Error al eliminar facturas'], 500);
+        }
     }
 
     public function cancel($companyId, $id)

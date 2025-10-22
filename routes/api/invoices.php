@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [InvoiceController::class, 'index']);
 Route::get('/next-number', [InvoiceController::class, 'getNextNumber']);
+Route::delete('/delete-all', [InvoiceController::class, 'deleteAll']);
 Route::post('/', [InvoiceController::class, 'store']);
 Route::post('/received', [InvoiceController::class, 'storeReceived']);
 Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);

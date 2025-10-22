@@ -37,26 +37,32 @@ class InvoiceApprovalController extends Controller
 
         // Update invoice approvals count
         $invoice->increment('approvals_received');
+        $invoice->refresh();
 
-        // Check if invoice has enough approvals
+        // Actualizar estado solo para la empresa receptora
         $company = $invoice->receiverCompany;
         $requiredApprovals = $company->required_approvals ?? 0;
         
-        // If required_approvals is 0, it means no approval is needed
-        // If required_approvals > 0, check if we have enough approvals
         if ($requiredApprovals === 0 || $invoice->approvals_received >= $requiredApprovals) {
+            // Guardar estado en JSON por empresa
+            $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+            $companyStatuses[(int)$companyId] = 'approved';
+            
             $invoice->update([
-                'status' => 'approved',
+                'company_statuses' => json_encode($companyStatuses),
                 'approval_date' => now(),
             ]);
         }
 
         $invoice->refresh();
+        
+        // Check if invoice is fully approved
+        $isFullyApproved = $requiredApprovals === 0 || $invoice->approvals_received >= $requiredApprovals;
 
         return $this->success([
             'approvals_received' => $invoice->approvals_received,
             'approvals_required' => $company->required_approvals,
-            'is_approved' => $invoice->status === 'approved',
+            'is_approved' => $isFullyApproved,
         ], 'Factura aprobada exitosamente');
     }
 
@@ -74,9 +80,12 @@ class InvoiceApprovalController extends Controller
             return $this->error('No se puede rechazar una factura con pagos registrados', 422);
         }
 
-        // Update invoice status
+        // Actualizar estado solo para esta empresa
+        $companyStatuses = json_decode($invoice->company_statuses ?? '{}', true);
+        $companyStatuses[(int)$companyId] = 'rejected';
+        
         $invoice->update([
-            'status' => 'rejected',
+            'company_statuses' => json_encode($companyStatuses),
             'rejection_reason' => $request->input('reason'),
             'rejected_at' => now(),
             'rejected_by' => $user->id,
@@ -89,19 +98,21 @@ class InvoiceApprovalController extends Controller
     {
         $invoice = Invoice::with(['approvals.user'])->findOrFail($invoiceId);
 
+        $approvals = $invoice->approvals->map(function ($approval) {
+            return [
+                'id' => $approval->id,
+                'user' => [
+                    'id' => $approval->user->id,
+                    'name' => $approval->user->name,
+                    'email' => $approval->user->email,
+                ],
+                'notes' => $approval->notes,
+                'approved_at' => $approval->approved_at->toIso8601String(),
+            ];
+        })->values();
+
         return $this->success([
-            'approvals' => $invoice->approvals->map(function ($approval) {
-                return [
-                    'id' => $approval->id,
-                    'user' => [
-                        'id' => $approval->user->id,
-                        'name' => $approval->user->name,
-                        'email' => $approval->user->email,
-                    ],
-                    'notes' => $approval->notes,
-                    'approved_at' => $approval->approved_at->toIso8601String(),
-                ];
-            }),
+            'approvals' => $approvals,
             'approvals_received' => $invoice->approvals_received,
             'approvals_required' => $invoice->receiverCompany->required_approvals,
         ]);

@@ -52,12 +52,6 @@ class PaymentService
                 $this->applyAutoRetentions($payment, $company, $invoice);
             }
             
-            // Actualizar estado de factura a paid si el pago cubre el total
-            if ($data['amount'] >= $invoice->total) {
-                $invoice->status = 'paid';
-                $invoice->save();
-            }
-            
             return $payment->load('retentions');
         });
     }

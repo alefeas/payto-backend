@@ -67,12 +67,7 @@ class PaymentController extends Controller
                 }
             }
 
-            // If status is confirmed, update invoice status
-            if ($payment->status === 'confirmed') {
-                $invoice = Invoice::find($validated['invoice_id']);
-                $invoice->status = 'paid';
-                $invoice->save();
-            }
+
 
             DB::commit();
 
