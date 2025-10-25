@@ -798,7 +798,7 @@ class InvoiceController extends Controller
                         
                         // 1. Buscar empresa conectada PRIMERO (normalizar CUIT sin guiones)
                         $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
-                        $receiverCompany = Company::whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])->first();
+                        $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
                         
                         if ($receiverCompany) {
                             // Empresa conectada encontrada - usar receiver_company_id
@@ -999,7 +999,7 @@ class InvoiceController extends Controller
                                         $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
                                         
                                         // 1. PRIORIZAR empresa conectada
-                                        $receiverCompany = Company::whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])->first();
+                                        $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
                                         
                                         if ($receiverCompany) {
                                             $receiverCompanyId = $receiverCompany->id;
@@ -1521,5 +1521,31 @@ class InvoiceController extends Controller
             ]);
             return range(1, 10);
         }
+    }
+
+    /**
+     * Find connected company by CUIT (only companies connected to the current company)
+     */
+    private function findConnectedCompanyByCuit(string $companyId, string $normalizedCuit): ?Company
+    {
+        // Get all connected company IDs
+        $connectedCompanyIds = \App\Models\CompanyConnection::where(function($query) use ($companyId) {
+            $query->where('company_id', $companyId)
+                  ->orWhere('connected_company_id', $companyId);
+        })
+        ->where('status', 'connected')
+        ->get()
+        ->map(function($connection) use ($companyId) {
+            return $connection->company_id === $companyId 
+                ? $connection->connected_company_id 
+                : $connection->company_id;
+        })
+        ->unique()
+        ->values();
+
+        // Search only among connected companies
+        return Company::whereIn('id', $connectedCompanyIds)
+            ->whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])
+            ->first();
     }
 }
