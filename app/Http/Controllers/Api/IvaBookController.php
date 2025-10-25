@@ -38,11 +38,6 @@ class IvaBookController extends Controller
             $query->where('user_id', auth()->id())->where('is_active', true);
         })->findOrFail($companyId);
 
-        // Solo para Responsables Inscriptos
-        if ($company->tax_condition !== 'registered_taxpayer') {
-            return $this->error('El Libro IVA solo está disponible para Responsables Inscriptos', 403);
-        }
-
         $request->validate([
             'month' => 'required|integer|min:1|max:12',
             'year' => 'required|integer|min:2020|max:2100',
@@ -54,10 +49,6 @@ class IvaBookController extends Controller
         // Obtener facturas emitidas del período (incluye NC/ND asociadas)
         // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
         $invoices = Invoice::where('issuer_company_id', $companyId)
-            ->where(function($q) {
-                $q->whereNotNull('client_id') // Facturas con cliente directo
-                  ->orWhereNotNull('related_invoice_id'); // O NC/ND asociadas
-            })
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
             ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
@@ -91,17 +82,21 @@ class IvaBookController extends Controller
         ];
 
         foreach ($invoices as $invoice) {
-            // Obtener cliente (directo o de factura relacionada)
+            // Obtener cliente (directo, de factura relacionada, o empresa receptora)
             $client = $invoice->client ?? $invoice->relatedInvoice?->client;
-            $clientName = 'CLIENTE ELIMINADO';
-            $clientCuit = '00000000000';
-            $clientTaxCondition = null;
+            $receiverCompany = $invoice->receiverCompany;
             
             if ($client) {
                 $clientName = $client->business_name ?? trim(($client->first_name ?? '') . ' ' . ($client->last_name ?? '')) ?: 'Sin nombre';
                 $clientCuit = $client->document_number;
                 $clientTaxCondition = $this->normalizeAfipTaxCondition($client->tax_condition);
+            } elseif ($receiverCompany) {
+                $clientName = $receiverCompany->name ?: $receiverCompany->business_name ?: 'Empresa sin nombre';
+                $clientCuit = $receiverCompany->national_id ?: $receiverCompany->cuit ?: '00000000000';
+                $clientTaxCondition = $this->normalizeAfipTaxCondition($receiverCompany->tax_condition);
             } else {
+                $clientName = 'CLIENTE ELIMINADO';
+                $clientCuit = '00000000000';
                 $clientTaxCondition = 'Responsable No Inscripto';
             }
             
@@ -208,11 +203,6 @@ class IvaBookController extends Controller
             $query->where('user_id', auth()->id())->where('is_active', true);
         })->findOrFail($companyId);
 
-        // Solo para Responsables Inscriptos
-        if ($company->tax_condition !== 'registered_taxpayer') {
-            return $this->error('El Libro IVA solo está disponible para Responsables Inscriptos', 403);
-        }
-
         $request->validate([
             'month' => 'required|integer|min:1|max:12',
             'year' => 'required|integer|min:2020|max:2100',
@@ -221,10 +211,10 @@ class IvaBookController extends Controller
         $month = $request->input('month');
         $year = $request->input('year');
 
-        // Obtener facturas recibidas del período (identificadas por supplier_id)
+        // Obtener facturas recibidas del período
         // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
         $invoices = Invoice::where('receiver_company_id', $companyId)
-            ->whereNotNull('supplier_id') // Solo facturas de proveedores externos
+            ->where('issuer_company_id', '!=', $companyId) // Excluir facturas propias
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
             ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
@@ -265,15 +255,20 @@ class IvaBookController extends Controller
                 })
                 ->sum('amount');
 
-            $supplierName = 'PROVEEDOR ELIMINADO';
-            $supplierCuit = '00000000000';
-            $supplierTaxCondition = null;
+            $supplier = $invoice->supplier;
+            $issuerCompany = $invoice->issuerCompany;
             
-            if ($invoice->supplier) {
-                $supplierName = $invoice->supplier->business_name ?? trim(($invoice->supplier->first_name ?? '') . ' ' . ($invoice->supplier->last_name ?? '')) ?: 'Sin nombre';
-                $supplierCuit = $invoice->supplier->document_number;
-                $supplierTaxCondition = $this->normalizeAfipTaxCondition($invoice->supplier->tax_condition);
+            if ($supplier) {
+                $supplierName = $supplier->business_name ?? trim(($supplier->first_name ?? '') . ' ' . ($supplier->last_name ?? '')) ?: 'Sin nombre';
+                $supplierCuit = $supplier->document_number;
+                $supplierTaxCondition = $this->normalizeAfipTaxCondition($supplier->tax_condition);
+            } elseif ($issuerCompany) {
+                $supplierName = $issuerCompany->name ?: $issuerCompany->business_name ?: 'Empresa sin nombre';
+                $supplierCuit = $issuerCompany->national_id ?: $issuerCompany->cuit ?: '00000000000';
+                $supplierTaxCondition = $this->normalizeAfipTaxCondition($issuerCompany->tax_condition);
             } else {
+                $supplierName = 'PROVEEDOR ELIMINADO';
+                $supplierCuit = '00000000000';
                 $supplierTaxCondition = 'Responsable No Inscripto';
             }
             
@@ -376,10 +371,6 @@ class IvaBookController extends Controller
             $query->where('user_id', auth()->id())->where('is_active', true);
         })->findOrFail($companyId);
 
-        if ($company->tax_condition !== 'registered_taxpayer') {
-            return $this->error('El Libro IVA solo está disponible para Responsables Inscriptos', 403);
-        }
-
         $request->validate([
             'month' => 'required|integer|min:1|max:12',
             'year' => 'required|integer|min:2020|max:2100',
@@ -408,10 +399,6 @@ class IvaBookController extends Controller
         $company = Company::whereHas('members', function ($query) {
             $query->where('user_id', auth()->id())->where('is_active', true);
         })->findOrFail($companyId);
-
-        if ($company->tax_condition !== 'registered_taxpayer') {
-            return $this->error('El Libro IVA solo está disponible para Responsables Inscriptos', 403);
-        }
 
         $request->validate([
             'month' => 'required|integer|min:1|max:12',
@@ -464,10 +451,6 @@ class IvaBookController extends Controller
         $company = Company::whereHas('members', function ($query) {
             $query->where('user_id', auth()->id())->where('is_active', true);
         })->findOrFail($companyId);
-
-        if ($company->tax_condition !== 'registered_taxpayer') {
-            return $this->error('El Libro IVA solo está disponible para Responsables Inscriptos', 403);
-        }
 
         $request->validate([
             'month' => 'required|integer|min:1|max:12',

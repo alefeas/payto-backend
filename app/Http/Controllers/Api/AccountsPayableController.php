@@ -17,11 +17,19 @@ class AccountsPayableController extends Controller
             $company = Company::findOrFail($companyId);
             $today = Carbon::today();
             
-            // Obtener todas las facturas recibidas APROBADAS (no pagadas) con pagos
-            $allInvoices = Invoice::where('receiver_company_id', $companyId)
-                ->where('status', 'approved')
-                ->with(['issuerCompany', 'supplier.company', 'payments'])
-                ->get();
+            // Obtener todas las facturas recibidas aprobadas
+            $company = Company::findOrFail($companyId);
+            $requiredApprovals = $company->required_approvals ?? 0;
+            
+            $query = Invoice::where('receiver_company_id', $companyId)
+                ->where('status', 'issued')
+                ->with(['issuerCompany', 'supplier.company', 'payments']);
+            
+            if ($requiredApprovals > 0) {
+                $query->where('approvals_received', '>=', $requiredApprovals);
+            }
+            
+            $allInvoices = $query->get();
         
             // Calcular paid_amount desde payments
             $allInvoices->each(function($invoice) {
@@ -193,8 +201,10 @@ class AccountsPayableController extends Controller
     public function getInvoices(Request $request, string $companyId)
     {
         try {
+            $company = Company::findOrFail($companyId);
+            $requiredApprovals = $company->required_approvals ?? 0;
+            
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->where('status', 'approved')
                 ->with(['issuerCompany', 'supplier.company', 'payments']);
         
             // Filtros
@@ -225,10 +235,16 @@ class AccountsPayableController extends Controller
                 });
             }
             
+            $query->where('status', 'issued');
+            
+            if ($requiredApprovals > 0) {
+                $query->where('approvals_received', '>=', $requiredApprovals);
+            }
+            
             $invoices = $query->orderByDesc('issue_date')->get();
             
             // Calcular payment_status y pending_amount dinámicamente
-            $invoices->each(function($invoice) {
+            $invoices->each(function($invoice) use ($companyId) {
                 $paidAmount = $invoice->payments->sum('amount');
                 $total = $invoice->total ?? 0;
                 
@@ -329,11 +345,19 @@ class AccountsPayableController extends Controller
 
     public function getSupplierSummary(string $companyId, string $supplierId)
     {
-        $invoices = Invoice::where('receiver_company_id', $companyId)
+        $company = Company::findOrFail($companyId);
+        $requiredApprovals = $company->required_approvals ?? 0;
+        
+        $query = Invoice::where('receiver_company_id', $companyId)
             ->where('issuer_company_id', $supplierId)
-            ->where('status', 'approved')
-            ->with('payments.retentions')
-            ->get();
+            ->where('status', 'issued')
+            ->with('payments.retentions');
+        
+        if ($requiredApprovals > 0) {
+            $query->where('approvals_received', '>=', $requiredApprovals);
+        }
+        
+        $invoices = $query->get();
             
         // Calcular paid_amount desde payments
         $invoices->each(function($invoice) {

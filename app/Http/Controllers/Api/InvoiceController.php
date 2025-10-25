@@ -446,11 +446,20 @@ class InvoiceController extends Controller
                 $afipService = new AfipInvoiceService($company);
                 $afipResult = $afipService->authorizeInvoice($invoice);
                 
+                // Si hay receiver_company_id, el status es issued para emisor pero pending_approval para receptor
+                // Usamos company_statuses JSON para manejar estados por empresa
+                $companyStatuses = [];
+                $companyStatuses[(string)$companyId] = 'issued'; // Emisor ve issued
+                if ($receiverCompanyId) {
+                    $companyStatuses[(string)$receiverCompanyId] = 'pending_approval'; // Receptor ve pending_approval
+                }
+                
                 $invoice->update([
                     'afip_cae' => $afipResult['cae'],
                     'afip_cae_due_date' => $afipResult['cae_expiration'],
                     'afip_status' => 'approved',
-                    'status' => 'issued',
+                    'status' => 'issued', // Status global para el emisor
+                    'company_statuses' => $companyStatuses,
                     'afip_sent_at' => now(),
                 ]);
                 
