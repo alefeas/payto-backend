@@ -712,6 +712,13 @@ class InvoiceController extends Controller
             'date_to' => 'required_if:mode,date_range|date|after_or_equal:date_from',
         ]);
 
+        if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
+            return response()->json([
+                'success' => false,
+                'error' => 'No active AFIP certificate found for this company',
+            ], 403);
+        }
+
         try {
             $afipService = new AfipInvoiceService($company);
             
@@ -773,24 +780,40 @@ class InvoiceController extends Controller
                     // Buscar receptor por CUIT
                     $receiverCompanyId = null;
                     $clientId = null;
+                    $receiverName = null;
+                    $receiverDocument = null;
                     
                     if (isset($afipData['doc_number']) && $afipData['doc_number'] != '0') {
+                        $receiverDocument = $afipData['doc_number'];
                         // Buscar empresa conectada primero
                         $receiverCompany = Company::where('national_id', $afipData['doc_number'])->first();
                         if ($receiverCompany) {
                             $receiverCompanyId = $receiverCompany->id;
+                            $receiverName = $receiverCompany->name;
                         } else {
-                            // Buscar cliente existente
+                            // Buscar o crear cliente
                             $client = \App\Models\Client::where('company_id', $company->id)
                                 ->where('document_number', $afipData['doc_number'])
                                 ->first();
-                            if ($client) {
-                                $clientId = $client->id;
+                            
+                            if (!$client) {
+                                // Crear cliente con CUIT
+                                $client = \App\Models\Client::create([
+                                    'company_id' => $company->id,
+                                    'document_type' => 'CUIT',
+                                    'document_number' => $afipData['doc_number'],
+                                    'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
+                                    'tax_condition' => 'monotax',
+                                    'created_by' => auth()->id(),
+                                ]);
                             }
+                            
+                            $clientId = $client->id;
+                            $receiverName = $client->business_name ?? trim($client->first_name . ' ' . $client->last_name);
                         }
                     }
                     
-                    Invoice::create([
+                    $invoice = Invoice::create([
                         'number' => $formattedNumber,
                         'type' => $invoiceType,
                         'sales_point' => $validated['sales_point'],
@@ -811,7 +834,21 @@ class InvoiceController extends Controller
                         'afip_status' => 'approved',
                         'afip_cae' => $afipData['cae'],
                         'afip_cae_due_date' => $afipData['cae_expiration'],
+                        'receiver_name' => $receiverName,
+                        'receiver_document' => $receiverDocument,
                         'created_by' => auth()->id(),
+                    ]);
+                    
+                    // Crear item genérico ya que AFIP no devuelve detalle
+                    $invoice->items()->create([
+                        'description' => 'Productos/Servicios',
+                        'quantity' => 1,
+                        'unit_price' => $afipData['subtotal'],
+                        'discount_percentage' => 0,
+                        'tax_rate' => $afipData['subtotal'] > 0 ? ($afipData['total_taxes'] / $afipData['subtotal']) * 100 : 0,
+                        'tax_amount' => $afipData['total_taxes'],
+                        'subtotal' => $afipData['subtotal'],
+                        'order_index' => 0,
                     ]);
                 }
                 
@@ -938,26 +975,28 @@ class InvoiceController extends Controller
 
                                 if (!$exists) {
                                     $clientId = null;
-                                    if (isset($afipData['client_document_type']) && 
-                                        isset($afipData['client_document_number']) && 
-                                        $afipData['client_document_number'] !== '0') {
-                                        
+                                    $receiverName = null;
+                                    $receiverDocument = null;
+                                    
+                                    if (isset($afipData['doc_number']) && $afipData['doc_number'] !== '0') {
+                                        $receiverDocument = $afipData['doc_number'];
                                         $client = \App\Models\Client::firstOrCreate(
                                             [
                                                 'company_id' => $company->id,
-                                                'document_type' => $afipData['client_document_type'],
-                                                'document_number' => $afipData['client_document_number'],
+                                                'document_number' => $afipData['doc_number'],
                                             ],
                                             [
-                                                'business_name' => 'Cliente AFIP',
-                                                'tax_condition' => 'monotributo',
+                                                'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
+                                                'document_type' => 'CUIT',
+                                                'tax_condition' => 'monotax',
                                                 'created_by' => auth()->id(),
                                             ]
                                         );
                                         $clientId = $client->id;
+                                        $receiverName = $client->business_name;
                                     }
 
-                                    Invoice::create([
+                                    $invoice = Invoice::create([
                                         'number' => $formattedNumber,
                                         'type' => $invoiceType,
                                         'sales_point' => $salesPoint,
@@ -977,7 +1016,21 @@ class InvoiceController extends Controller
                                         'afip_status' => 'approved',
                                         'afip_cae' => $afipData['cae'],
                                         'afip_cae_due_date' => $afipData['cae_expiration'],
+                                        'receiver_name' => $receiverName,
+                                        'receiver_document' => $receiverDocument,
                                         'created_by' => auth()->id(),
+                                    ]);
+                                    
+                                    // Crear item genérico ya que AFIP no devuelve detalle
+                                    $invoice->items()->create([
+                                        'description' => 'Productos/Servicios',
+                                        'quantity' => 1,
+                                        'unit_price' => $afipData['subtotal'],
+                                        'discount_percentage' => 0,
+                                        'tax_rate' => $afipData['subtotal'] > 0 ? ($afipData['total_taxes'] / $afipData['subtotal']) * 100 : 0,
+                                        'tax_amount' => $afipData['total_taxes'],
+                                        'subtotal' => $afipData['subtotal'],
+                                        'order_index' => 0,
                                     ]);
                                 }
 

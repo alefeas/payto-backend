@@ -141,8 +141,17 @@ class SupplierController extends Controller
             return response()->json(['message' => 'Debe proporcionar al menos un dato de contacto (email o teléfono)'], 422);
         }
 
-        // Check for duplicate if document_number is being changed (including soft deleted)
+        // Check if supplier has invoices - if so, block document_number change
         if (isset($validated['document_number']) && $validated['document_number'] !== $supplier->document_number) {
+            $hasInvoices = \App\Models\Invoice::where('supplier_id', $id)->exists();
+            
+            if ($hasInvoices) {
+                return response()->json([
+                    'message' => 'No se puede modificar el CUIT/DNI porque este proveedor tiene facturas asociadas. Si necesitas cambiar el CUIT, crea un nuevo proveedor.'
+                ], 422);
+            }
+            
+            // Check for duplicate (including soft deleted)
             $existing = Supplier::where('company_id', $companyId)
                 ->where('document_number', $validated['document_number'])
                 ->where('id', '!=', $id)

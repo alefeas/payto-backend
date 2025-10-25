@@ -146,8 +146,18 @@ class ClientController extends Controller
             return $this->error('Debe proporcionar al menos un dato de contacto (email o teléfono)', 422);
         }
 
-        // Check for duplicate if document_number is being changed (including soft deleted)
+        // Check if client has invoices - if so, block document_number change
         if (isset($validated['document_number']) && $validated['document_number'] !== $client->document_number) {
+            $hasInvoices = \App\Models\Invoice::where('client_id', $clientId)->exists();
+            
+            if ($hasInvoices) {
+                return $this->error(
+                    'No se puede modificar el CUIT/DNI porque este cliente tiene facturas asociadas. Si necesitas cambiar el CUIT, crea un nuevo cliente.',
+                    422
+                );
+            }
+            
+            // Check for duplicate (including soft deleted)
             $existing = Client::where('company_id', $companyId)
                 ->where('document_number', $validated['document_number'])
                 ->where('id', '!=', $clientId)
