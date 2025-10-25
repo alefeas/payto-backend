@@ -14,6 +14,16 @@ use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 class InvoiceController extends Controller
 {
     use AuthorizesRequests;
+    
+    /**
+     * Normalizar CUIT: remover guiones para comparación
+     * AFIP devuelve: 20123456789
+     * Sistema guarda: 20-12345678-9
+     */
+    private function normalizeCuit(string $cuit): string
+    {
+        return str_replace('-', '', $cuit);
+    }
     public function index(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
@@ -777,7 +787,7 @@ class InvoiceController extends Controller
                 ]);
                 
                 if (!$exists) {
-                    // Buscar receptor por CUIT
+                    // Buscar receptor por CUIT - PRIORIZAR empresas conectadas
                     $receiverCompanyId = null;
                     $clientId = null;
                     $receiverName = null;
@@ -785,25 +795,30 @@ class InvoiceController extends Controller
                     
                     if (isset($afipData['doc_number']) && $afipData['doc_number'] != '0') {
                         $receiverDocument = $afipData['doc_number'];
-                        // Buscar empresa conectada primero
-                        $receiverCompany = Company::where('national_id', $afipData['doc_number'])->first();
+                        
+                        // 1. Buscar empresa conectada PRIMERO (normalizar CUIT sin guiones)
+                        $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
+                        $receiverCompany = Company::whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])->first();
+                        
                         if ($receiverCompany) {
+                            // Empresa conectada encontrada - usar receiver_company_id
                             $receiverCompanyId = $receiverCompany->id;
                             $receiverName = $receiverCompany->name;
+                            // NO usar client_id cuando hay empresa conectada
                         } else {
-                            // Buscar o crear cliente
+                            // 2. No hay empresa conectada - buscar cliente externo (normalizar CUIT)
                             $client = \App\Models\Client::where('company_id', $company->id)
-                                ->where('document_number', $afipData['doc_number'])
+                                ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
                                 ->first();
                             
                             if (!$client) {
-                                // Crear cliente con CUIT
                                 $client = \App\Models\Client::create([
                                     'company_id' => $company->id,
                                     'document_type' => 'CUIT',
                                     'document_number' => $afipData['doc_number'],
                                     'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
                                     'tax_condition' => 'monotax',
+                                    'address' => null, // Domicilio fiscal no disponible desde AFIP
                                     'created_by' => auth()->id(),
                                 ]);
                             }
@@ -974,26 +989,42 @@ class InvoiceController extends Controller
                                 $exists = isset($existingInvoices[$key]);
 
                                 if (!$exists) {
+                                    $receiverCompanyId = null;
                                     $clientId = null;
                                     $receiverName = null;
                                     $receiverDocument = null;
                                     
                                     if (isset($afipData['doc_number']) && $afipData['doc_number'] !== '0') {
                                         $receiverDocument = $afipData['doc_number'];
-                                        $client = \App\Models\Client::firstOrCreate(
-                                            [
-                                                'company_id' => $company->id,
-                                                'document_number' => $afipData['doc_number'],
-                                            ],
-                                            [
-                                                'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
-                                                'document_type' => 'CUIT',
-                                                'tax_condition' => 'monotax',
-                                                'created_by' => auth()->id(),
-                                            ]
-                                        );
-                                        $clientId = $client->id;
-                                        $receiverName = $client->business_name;
+                                        $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
+                                        
+                                        // 1. PRIORIZAR empresa conectada
+                                        $receiverCompany = Company::whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])->first();
+                                        
+                                        if ($receiverCompany) {
+                                            $receiverCompanyId = $receiverCompany->id;
+                                            $receiverName = $receiverCompany->name;
+                                        } else {
+                                            // 2. Buscar cliente externo
+                                            $client = \App\Models\Client::where('company_id', $company->id)
+                                                ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
+                                                ->first();
+                                            
+                                            if (!$client) {
+                                                $client = \App\Models\Client::create([
+                                                    'company_id' => $company->id,
+                                                    'document_number' => $afipData['doc_number'],
+                                                    'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
+                                                    'document_type' => 'CUIT',
+                                                    'tax_condition' => 'monotax',
+                                                    'address' => null, // Domicilio fiscal no disponible desde AFIP
+                                                    'created_by' => auth()->id(),
+                                                ]);
+                                            }
+                                            
+                                            $clientId = $client->id;
+                                            $receiverName = $client->business_name;
+                                        }
                                     }
 
                                     $invoice = Invoice::create([
@@ -1003,6 +1034,7 @@ class InvoiceController extends Controller
                                         'voucher_number' => $num,
                                         'concept' => 'products',
                                         'issuer_company_id' => $company->id,
+                                        'receiver_company_id' => $receiverCompanyId,
                                         'client_id' => $clientId,
                                         'issue_date' => $afipData['issue_date'],
                                         'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30),

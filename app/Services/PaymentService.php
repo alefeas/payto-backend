@@ -17,7 +17,7 @@ class PaymentService
             
             // Validar que la factura pertenece a la empresa
             if ($invoice->receiver_company_id !== $company->id) {
-                throw new \Exception('Invoice does not belong to this company');
+                throw new \Exception('No tienes permisos para registrar pagos en esta factura. La factura no pertenece a tu empresa.');
             }
             
             // Crear pago confirmado directamente
@@ -52,17 +52,8 @@ class PaymentService
                 $this->applyAutoRetentions($payment, $company, $invoice);
             }
             
-            // Actualizar company_statuses JSON para esta empresa
-            $totalPaid = Payment::where('invoice_id', $invoice->id)
-                ->where('status', 'confirmed')
-                ->sum('amount');
-            
-            if ($totalPaid >= $invoice->total) {
-                $companyStatuses = $invoice->company_statuses ?: [];
-                $companyStatuses[(string)$company->id] = 'paid';
-                $invoice->company_statuses = $companyStatuses;
-                $invoice->save();
-            }
+            // Actualizar estado de la factura
+            $this->updateInvoiceStatus($invoice, $company);
             
             return $payment->load('retentions');
         });
@@ -129,6 +120,49 @@ class PaymentService
         }
         
         return $retentions;
+    }
+
+    public function deletePayment(Payment $payment, Company $company): bool
+    {
+        return DB::transaction(function() use ($payment, $company) {
+            // Validar permisos
+            if ($payment->company_id !== $company->id) {
+                throw new \Exception('No tienes permisos para eliminar este pago.');
+            }
+            
+            $invoice = $payment->invoice;
+            
+            // Eliminar retenciones asociadas
+            PaymentRetention::where('payment_id', $payment->id)->delete();
+            
+            // Eliminar el pago
+            $deleted = $payment->delete();
+            
+            if ($deleted) {
+                // Recalcular el estado de la factura
+                $this->updateInvoiceStatus($invoice, $company);
+            }
+            
+            return $deleted;
+        });
+    }
+    
+    private function updateInvoiceStatus(Invoice $invoice, Company $company): void
+    {
+        $totalPaid = Payment::where('invoice_id', $invoice->id)
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        $companyStatuses = $invoice->company_statuses ?: [];
+        
+        if ($totalPaid >= $invoice->total) {
+            $companyStatuses[(string)$company->id] = 'paid';
+        } else {
+            $companyStatuses[(string)$company->id] = 'pending';
+        }
+        
+        $invoice->company_statuses = $companyStatuses;
+        $invoice->save();
     }
 
     public function generatePaymentTxt(array $paymentIds, Company $company): string

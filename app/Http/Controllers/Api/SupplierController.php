@@ -20,7 +20,7 @@ class SupplierController extends Controller
         return response()->json($suppliers);
     }
 
-    public function trashed($companyId)
+    public function archived($companyId)
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('viewAny', [Supplier::class, $company]);
@@ -88,7 +88,7 @@ class SupplierController extends Controller
         if ($existing) {
             if ($existing->trashed()) {
                 return response()->json([
-                    'message' => 'Ya existe un proveedor eliminado con este CUIT. Restaura el proveedor existente desde la sección "Proveedores eliminados" para editarlo.'
+                    'message' => 'Ya existe un proveedor archivado con este CUIT. Restaura el proveedor existente desde la sección "Proveedores archivados" para editarlo.'
                 ], 422);
             }
             return response()->json(['message' => 'Ya existe un proveedor con este CUIT'], 422);
@@ -161,7 +161,7 @@ class SupplierController extends Controller
             if ($existing) {
                 if ($existing->trashed()) {
                     return response()->json([
-                        'message' => 'Ya existe un proveedor eliminado con este CUIT. No puedes usar un CUIT duplicado.'
+                        'message' => 'Ya existe un proveedor archivado con este CUIT. No puedes usar un CUIT duplicado.'
                     ], 422);
                 }
                 return response()->json(['message' => 'Ya existe un proveedor con este CUIT'], 422);
@@ -179,9 +179,9 @@ class SupplierController extends Controller
 
         $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
         
-        // SoftDelete: El proveedor se marca como eliminado pero los datos persisten
+        // SoftDelete: El proveedor se marca como archivado pero los datos persisten
         // El Libro IVA puede seguir accediendo con withTrashed()
         $supplier->delete();
-        return response()->json(['message' => 'Proveedor eliminado correctamente'], 200);
+        return response()->json(['message' => 'Proveedor archivado correctamente'], 200);
     }
 }

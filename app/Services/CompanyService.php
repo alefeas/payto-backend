@@ -306,11 +306,18 @@ class CompanyService implements CompanyServiceInterface
             throw new BadRequestException('Código de eliminación incorrecto');
         }
 
+        // Verificar si la empresa tiene facturas asociadas
+        $hasInvoices = $company->issuedInvoices()->exists() || $company->receivedInvoices()->exists();
+        
+        $auditMessage = $hasInvoices 
+            ? "Perfil fiscal {$company->name} eliminado - facturas y datos contables preservados para mantener integridad del sistema"
+            : "Perfil fiscal {$company->name} eliminado - no tenía facturas asociadas";
+
         $this->auditService->log(
             $companyId,
             $userId,
             'company.deleted',
-            "Empresa {$company->name} eliminada permanentemente",
+            $auditMessage,
             'Company',
             $companyId
         );

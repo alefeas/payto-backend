@@ -26,7 +26,7 @@ class ClientController extends Controller
         return $this->success($clients);
     }
 
-    public function trashed(string $companyId): JsonResponse
+    public function archived(string $companyId): JsonResponse
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('viewAny', [Client::class, $company]);
@@ -66,7 +66,7 @@ class ClientController extends Controller
             'last_name' => 'nullable|string',
             'email' => 'nullable|email',
             'phone' => 'nullable|string',
-            'address' => 'nullable|string',
+            'address' => 'nullable|string', // Domicilio fiscal - opcional, AFIP no lo requiere para facturación
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
         
@@ -93,7 +93,7 @@ class ClientController extends Controller
         if ($existing) {
             if ($existing->trashed()) {
                 return $this->error(
-                    'Ya existe un cliente eliminado con este CUIT. Restaura el cliente existente desde la sección "Clientes eliminados" para editarlo.',
+                    'Ya existe un cliente archivado con este CUIT. Restaura el cliente existente desde la sección "Clientes archivados" para editarlo.',
                     422
                 );
             }
@@ -167,7 +167,7 @@ class ClientController extends Controller
             if ($existing) {
                 if ($existing->trashed()) {
                     return $this->error(
-                        'Ya existe un cliente eliminado con este CUIT. No puedes usar un CUIT duplicado.',
+                        'Ya existe un cliente archivado con este CUIT. No puedes usar un CUIT duplicado.',
                         422
                     );
                 }
@@ -187,10 +187,10 @@ class ClientController extends Controller
 
         $client = Client::where('company_id', $companyId)->findOrFail($clientId);
 
-        // SoftDelete: El cliente se marca como eliminado pero los datos persisten
+        // SoftDelete: El cliente se marca como archivado pero los datos persisten
         // El Libro IVA puede seguir accediendo con withTrashed()
         $client->delete();
 
-        return $this->success(null, 'Cliente eliminado correctamente');
+        return $this->success(null, 'Cliente archivado correctamente');
     }
 }

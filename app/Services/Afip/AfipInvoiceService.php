@@ -307,6 +307,9 @@ class AfipInvoiceService
             $receptor->document_number ?? $receptor->national_id ?? $receptor->cuit ?? '0'
         );
         
+        // NOTA: AFIP no requiere domicilio fiscal en la emisión de comprobantes electrónicos
+        // El domicilio se obtiene automáticamente del padrón de AFIP usando el CUIT
+        
         // Validar CUIT para Facturas A y M (AFIP exige DocTipo=80 y CUIT válido)
         $tiposAyM = [1, 2, 3, 4, 5, 39, 40, 51, 52, 53, 60, 61, 63, 64, 201, 202, 203, 206, 207, 208, 211, 212, 213];
         if (in_array($invoiceType, $tiposAyM)) {
