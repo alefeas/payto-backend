@@ -35,10 +35,10 @@ class InvoiceController extends Controller
         if ($status && $status !== 'all') {
             if ($status === 'overdue') {
                 $query->whereDate('due_date', '<', now())
-                      ->whereNotIn('status', ['paid', 'cancelled']);
+                      ->whereNotIn('status', ['paid', 'collected', 'cancelled']);
             } elseif ($status === 'collected') {
                 $query->where('issuer_company_id', $companyId)
-                      ->where('status', 'paid');
+                      ->where('status', 'collected');
             } elseif ($status === 'paid') {
                 $query->where('receiver_company_id', $companyId)
                       ->where('status', 'paid');

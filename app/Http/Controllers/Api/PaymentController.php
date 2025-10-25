@@ -67,7 +67,20 @@ class PaymentController extends Controller
                 }
             }
 
-
+            // Si el pago se crea como confirmado, actualizar estado de factura
+            if ($payment->status === 'confirmed') {
+                $invoice = Invoice::find($payment->invoice_id);
+                if ($invoice) {
+                    $totalPaid = Payment::where('invoice_id', $invoice->id)
+                        ->where('status', 'confirmed')
+                        ->sum('amount');
+                    
+                    if ($totalPaid >= $invoice->total) {
+                        $invoice->status = 'paid';
+                        $invoice->save();
+                    }
+                }
+            }
 
             DB::commit();
 
@@ -104,9 +117,30 @@ class PaymentController extends Controller
             return response()->json(['error' => 'Cannot delete confirmed payment'], 400);
         }
 
-        $payment->delete();
+        DB::beginTransaction();
+        try {
+            $invoiceId = $payment->invoice_id;
+            $payment->delete();
 
-        return response()->json(['message' => 'Payment deleted successfully']);
+            // Recalcular estado de factura
+            $invoice = Invoice::find($invoiceId);
+            if ($invoice && $invoice->status === 'paid') {
+                $totalPaid = Payment::where('invoice_id', $invoice->id)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+                
+                if ($totalPaid < $invoice->total) {
+                    $invoice->status = 'issued';
+                    $invoice->save();
+                }
+            }
+
+            DB::commit();
+            return response()->json(['message' => 'Payment deleted successfully']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error deleting payment'], 500);
+        }
     }
 
     public function confirm(Request $request, $companyId, $paymentId)
@@ -124,10 +158,16 @@ class PaymentController extends Controller
             $payment->confirmed_at = now();
             $payment->save();
 
-            // Update invoice status to paid
+            // Update invoice status to paid only if fully paid
             $invoice = $payment->invoice;
-            $invoice->status = 'paid';
-            $invoice->save();
+            $totalPaid = Payment::where('invoice_id', $invoice->id)
+                ->where('status', 'confirmed')
+                ->sum('amount');
+            
+            if ($totalPaid >= $invoice->total) {
+                $invoice->status = 'paid';
+                $invoice->save();
+            }
 
             DB::commit();
 

@@ -17,12 +17,11 @@ class AccountsPayableController extends Controller
             $company = Company::findOrFail($companyId);
             $today = Carbon::today();
             
-            // Obtener todas las facturas recibidas aprobadas
+            // Obtener todas las facturas recibidas aprobadas y pendientes de pago
             $company = Company::findOrFail($companyId);
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->where('status', 'issued')
                 ->with(['issuerCompany', 'supplier.company', 'payments']);
             
             if ($requiredApprovals > 0) {
@@ -235,8 +234,6 @@ class AccountsPayableController extends Controller
                 });
             }
             
-            $query->where('status', 'issued');
-            
             if ($requiredApprovals > 0) {
                 $query->where('approvals_received', '>=', $requiredApprovals);
             }
@@ -271,9 +268,11 @@ class AccountsPayableController extends Controller
                 $invoice->has_bank_data = $hasBankData;
             });
             
-            // Filtrar facturas completamente pagadas (pending_amount <= 0)
-            $invoices = $invoices->filter(function($inv) {
-                return $inv->pending_amount > 0;
+            // Filtrar facturas completamente pagadas usando company_statuses JSON
+            $invoices = $invoices->filter(function($inv) use ($companyId) {
+                $companyStatuses = $inv->company_statuses ?: [];
+                $companyStatus = $companyStatuses[(string)$companyId] ?? null;
+                return $companyStatus !== 'paid' && $inv->pending_amount > 0;
             })->values();
             
             // Aplicar filtro de payment_status si existe
@@ -350,7 +349,6 @@ class AccountsPayableController extends Controller
         
         $query = Invoice::where('receiver_company_id', $companyId)
             ->where('issuer_company_id', $supplierId)
-            ->where('status', 'issued')
             ->with('payments.retentions');
         
         if ($requiredApprovals > 0) {

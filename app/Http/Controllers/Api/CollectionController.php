@@ -87,6 +87,24 @@ class CollectionController extends Controller
         DB::beginTransaction();
         try {
             $collection = Collection::create($validated);
+            
+            // Si la colección se crea como confirmada, actualizar company_statuses JSON
+            if ($collection->status === 'confirmed') {
+                $invoice = Invoice::find($collection->invoice_id);
+                if ($invoice) {
+                    $totalCollected = Collection::where('invoice_id', $invoice->id)
+                        ->where('status', 'confirmed')
+                        ->sum('amount');
+                    
+                    if ($totalCollected >= $invoice->total) {
+                        $companyStatuses = $invoice->company_statuses ?: [];
+                        $companyStatuses[(string)$companyId] = 'paid';
+                        $invoice->company_statuses = $companyStatuses;
+                        $invoice->save();
+                    }
+                }
+            }
+            
             DB::commit();
             return response()->json($collection->load(['invoice.client', 'registeredBy']), 201);
         } catch (\Exception $e) {
@@ -128,12 +146,63 @@ class CollectionController extends Controller
             $collection->confirmed_at = now();
             $collection->save();
 
+            // Actualizar company_statuses JSON para esta empresa
+            $invoice = $collection->invoice;
+            $totalCollected = Collection::where('invoice_id', $invoice->id)
+                ->where('status', 'confirmed')
+                ->sum('amount');
+            
+            if ($totalCollected >= $invoice->total) {
+                $companyStatuses = $invoice->company_statuses ?: [];
+                $companyStatuses[(string)$companyId] = 'paid';
+                $invoice->company_statuses = $companyStatuses;
+                $invoice->save();
+            }
+
             DB::commit();
 
             return response()->json($collection->load(['invoice.client', 'registeredBy', 'confirmedBy']));
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['error' => 'Error confirming collection'], 500);
+        }
+    }
+
+    public function destroy($companyId, $collectionId)
+    {
+        $collection = Collection::where('company_id', $companyId)->findOrFail($collectionId);
+        
+        if ($collection->status === 'confirmed') {
+            return response()->json(['error' => 'Cannot delete confirmed collection'], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            $invoiceId = $collection->invoice_id;
+            $collection->delete();
+
+            // Recalcular company_statuses JSON
+            $invoice = Invoice::find($invoiceId);
+            if ($invoice) {
+                $totalCollected = Collection::where('invoice_id', $invoice->id)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+                
+                $companyStatuses = $invoice->company_statuses ?: [];
+                if ($totalCollected < $invoice->total) {
+                    $companyStatuses[(string)$companyId] = 'issued';
+                } else {
+                    $companyStatuses[(string)$companyId] = 'paid';
+                }
+                $invoice->company_statuses = $companyStatuses;
+                $invoice->save();
+            }
+
+            DB::commit();
+            return response()->json(['message' => 'Collection deleted successfully']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error deleting collection'], 500);
         }
     }
 
@@ -149,12 +218,37 @@ class CollectionController extends Controller
             'notes' => 'nullable|string',
         ]);
 
-        $collection->status = 'rejected';
-        if (isset($validated['notes'])) {
-            $collection->notes = $validated['notes'];
-        }
-        $collection->save();
+        DB::beginTransaction();
+        try {
+            $invoiceId = $collection->invoice_id;
+            $collection->status = 'rejected';
+            if (isset($validated['notes'])) {
+                $collection->notes = $validated['notes'];
+            }
+            $collection->save();
 
-        return response()->json($collection->load(['invoice.client', 'registeredBy']));
+            // Recalcular company_statuses JSON
+            $invoice = Invoice::find($invoiceId);
+            if ($invoice) {
+                $totalCollected = Collection::where('invoice_id', $invoice->id)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+                
+                $companyStatuses = $invoice->company_statuses ?: [];
+                if ($totalCollected < $invoice->total) {
+                    $companyStatuses[(string)$companyId] = 'issued';
+                } else {
+                    $companyStatuses[(string)$companyId] = 'paid';
+                }
+                $invoice->company_statuses = $companyStatuses;
+                $invoice->save();
+            }
+
+            DB::commit();
+            return response()->json($collection->load(['invoice.client', 'registeredBy']));
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['error' => 'Error rejecting collection'], 500);
+        }
     }
 }

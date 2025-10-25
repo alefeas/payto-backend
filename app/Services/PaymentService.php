@@ -52,6 +52,18 @@ class PaymentService
                 $this->applyAutoRetentions($payment, $company, $invoice);
             }
             
+            // Actualizar company_statuses JSON para esta empresa
+            $totalPaid = Payment::where('invoice_id', $invoice->id)
+                ->where('status', 'confirmed')
+                ->sum('amount');
+            
+            if ($totalPaid >= $invoice->total) {
+                $companyStatuses = $invoice->company_statuses ?: [];
+                $companyStatuses[(string)$company->id] = 'paid';
+                $invoice->company_statuses = $companyStatuses;
+                $invoice->save();
+            }
+            
             return $payment->load('retentions');
         });
     }
