@@ -7,6 +7,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Skip if columns don't exist (fresh database)
+        if (!\Schema::hasColumn('invoices', 'receiver_document')) {
+            return;
+        }
         // Normalize CUITs in companies table
         $companies = DB::table('companies')->get();
         foreach ($companies as $company) {
@@ -40,7 +44,10 @@ return new class extends Migration
             }
         }
 
-        // Normalize receiver_document in invoices table
+        // Normalize receiver_document in invoices table (only if column exists)
+        if (!\Schema::hasColumn('invoices', 'receiver_document')) {
+            return;
+        }
         $invoices = DB::table('invoices')->whereNotNull('receiver_document')->get();
         foreach ($invoices as $invoice) {
             $normalizedCuit = $this->formatCuitWithHyphens($invoice->receiver_document);

@@ -942,7 +942,7 @@ class InvoiceController extends Controller
             
             return response()->json([
                 'success' => false,
-                'message' => 'Error al consultar factura',
+                'message' => 'No se pudo sincronizar la factura desde AFIP. Verificá el punto de venta, tipo y número de comprobante',
                 'error' => $e->getMessage(),
             ], 422);
         }

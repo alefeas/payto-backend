@@ -7,6 +7,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Skip if columns don't exist yet (fresh database)
+        if (!\Schema::hasColumn('companies', 'auto_retentions')) {
+            return;
+        }
+        
         // Update auto_retentions JSON field in companies table
         $companies = DB::table('companies')->whereNotNull('auto_retentions')->get();
         

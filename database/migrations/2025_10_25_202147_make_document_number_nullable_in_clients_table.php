@@ -8,16 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Just make document_number nullable, skip constraint changes for fresh database
         Schema::table('clients', function (Blueprint $table) {
-            // Drop the existing unique constraint
-            $table->dropUnique(['company_id', 'document_number']);
-            
-            // Make document_number nullable
             $table->string('document_number')->nullable()->change();
-            
-            // Add new unique constraint that handles nulls properly
-            // This will allow multiple null values but enforce uniqueness for non-null values
-            $table->unique(['company_id', 'document_number'], 'clients_company_document_unique');
         });
     }
 

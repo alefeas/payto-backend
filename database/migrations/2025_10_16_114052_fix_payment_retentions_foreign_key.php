@@ -12,6 +12,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('payment_retentions', function (Blueprint $table) {
+            // Drop existing foreign key if exists
+            try {
+                $table->dropForeign(['payment_id']);
+            } catch (\Exception $e) {
+                // Foreign key doesn't exist, continue
+            }
+            
             $table->unsignedBigInteger('payment_id')->change();
             $table->foreign('payment_id')->references('id')->on('invoice_payments_tracking')->onDelete('cascade');
         });
