@@ -18,6 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
             'company.member' => \App\Http\Middleware\CheckCompanyMembership::class,
             'company.role' => \App\Http\Middleware\CheckCompanyRole::class,
         ]);
+        
+        // Enable CORS for API routes
+        $middleware->api([
+            \Illuminate\Http\Middleware\HandleCors::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         $exceptions->shouldRenderJsonWhen(function ($request, Throwable $e) {
