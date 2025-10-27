@@ -19,9 +19,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'company.role' => \App\Http\Middleware\CheckCompanyRole::class,
         ]);
         
-        // Enable CORS for API routes
-        $middleware->api([
-            \Illuminate\Http\Middleware\HandleCors::class,
+        // Enable custom CORS middleware globally
+        $middleware->use([
+            \App\Http\Middleware\Cors::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
