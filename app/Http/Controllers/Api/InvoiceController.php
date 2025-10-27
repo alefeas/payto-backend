@@ -40,7 +40,11 @@ class InvoiceController extends Controller
         // Solo facturas emitidas por esta empresa O recibidas por esta empresa
         $query = Invoice::where('issuer_company_id', $companyId)
             ->orWhere('receiver_company_id', $companyId)
-            ->with(['client', 'supplier', 'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice', 'payments', 'collections']);
+            ->with([
+                'client' => function($query) { $query->withTrashed(); },
+                'supplier' => function($query) { $query->withTrashed(); },
+                'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice', 'payments', 'collections'
+            ]);
 
         if ($status && $status !== 'all') {
             if ($status === 'overdue') {
@@ -536,7 +540,10 @@ class InvoiceController extends Controller
                 $q->where('issuer_company_id', $companyId)
                   ->orWhere('receiver_company_id', $companyId);
             })
-            ->with(['client', 'items', 'receiverCompany', 'issuerCompany'])
+            ->with([
+                'client' => function($query) { $query->withTrashed(); },
+                'items', 'receiverCompany', 'issuerCompany'
+            ])
             ->findOrFail($id);
 
         $this->authorize('view', $invoice);
@@ -759,12 +766,26 @@ class InvoiceController extends Controller
         $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
         
         try {
+            Log::info('🔍 CALLING AFIP consultInvoice (single)', [
+                'issuer_cuit' => $company->national_id,
+                'invoice_type_code' => $invoiceTypeCode,
+                'sales_point' => $validated['sales_point'],
+                'voucher_number' => $validated['invoice_number'],
+            ]);
+            
             $afipData = $afipService->consultInvoice(
                 $company->national_id,
                 $invoiceTypeCode,
                 $validated['sales_point'],
                 $validated['invoice_number']
             );
+            
+            Log::info('📥 AFIP RESPONSE RECEIVED (single)', [
+                'found' => $afipData['found'] ?? false,
+                'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
+                'cae' => $afipData['cae'] ?? 'NULL',
+                'issue_date' => $afipData['issue_date'] ?? 'NULL',
+            ]);
 
             if ($afipData['found']) {
                 DB::beginTransaction();
@@ -794,10 +815,17 @@ class InvoiceController extends Controller
                     $receiverDocument = null;
                     
                     if (isset($afipData['doc_number']) && $afipData['doc_number'] != '0') {
-                        $receiverDocument = $afipData['doc_number'];
-                        
-                        // 1. Buscar empresa conectada PRIMERO (normalizar CUIT sin guiones)
+                        // AFIP devuelve CUIT sin guiones (20123456789)
                         $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
+                        $receiverDocument = $this->formatCuitWithHyphens($normalizedCuit);
+                        
+                        Log::info('Processing CUIT from AFIP', [
+                            'afip_raw' => $afipData['doc_number'],
+                            'normalized' => $normalizedCuit,
+                            'formatted' => $receiverDocument,
+                        ]);
+                        
+                        // 1. Buscar empresa conectada PRIMERO
                         $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
                         
                         if ($receiverCompany) {
@@ -806,8 +834,9 @@ class InvoiceController extends Controller
                             $receiverName = $receiverCompany->name;
                             // NO usar client_id cuando hay empresa conectada
                         } else {
-                            // 2. No hay empresa conectada - buscar cliente externo (normalizar CUIT)
-                            $client = \App\Models\Client::where('company_id', $company->id)
+                            // 2. No hay empresa conectada - buscar cliente externo (incluir archivados)
+                            $client = \App\Models\Client::withTrashed()
+                                ->where('company_id', $company->id)
                                 ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
                                 ->first();
                             
@@ -815,12 +844,14 @@ class InvoiceController extends Controller
                                 $client = \App\Models\Client::create([
                                     'company_id' => $company->id,
                                     'document_type' => 'CUIT',
-                                    'document_number' => $afipData['doc_number'],
-                                    'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
+                                    'document_number' => $receiverDocument,
+                                    'business_name' => 'Cliente AFIP - ' . $receiverDocument,
                                     'tax_condition' => 'monotax',
-                                    'address' => null, // Domicilio fiscal no disponible desde AFIP
-                                    'created_by' => auth()->id(),
+                                    'address' => null,
+                                    'incomplete_data' => true,
                                 ]);
+                                $client->delete(); // Archivar inmediatamente
+                                $autoCreatedClient = true;
                             }
                             
                             $clientId = $client->id;
@@ -828,12 +859,16 @@ class InvoiceController extends Controller
                         }
                     }
                     
+                    // AFIP no devuelve el concepto - usar default 'products'
+                    // El usuario puede editarlo manualmente después
+                    $concept = 'products';
+                    
                     $invoice = Invoice::create([
                         'number' => $formattedNumber,
                         'type' => $invoiceType,
                         'sales_point' => $validated['sales_point'],
                         'voucher_number' => $validated['invoice_number'],
-                        'concept' => 'products',
+                        'concept' => $concept,
                         'issuer_company_id' => $company->id,
                         'receiver_company_id' => $receiverCompanyId,
                         'client_id' => $clientId,
@@ -851,6 +886,8 @@ class InvoiceController extends Controller
                         'afip_cae_due_date' => $afipData['cae_expiration'],
                         'receiver_name' => $receiverName,
                         'receiver_document' => $receiverDocument,
+                        'needs_review' => isset($autoCreatedClient),
+                        'synced_from_afip' => true,
                         'created_by' => auth()->id(),
                     ]);
                     
@@ -872,6 +909,7 @@ class InvoiceController extends Controller
                 return response()->json([
                     'success' => true,
                     'imported_count' => 1,
+                    'auto_created_clients' => isset($autoCreatedClient) ? 1 : 0,
                     'invoices' => [[
                         'sales_point' => $validated['sales_point'],
                         'type' => $validated['invoice_type'],
@@ -879,7 +917,11 @@ class InvoiceController extends Controller
                         'formatted_number' => $formattedNumber,
                         'data' => $afipData,
                         'saved' => !$exists,
+                        'auto_created_client' => isset($autoCreatedClient),
                     ]],
+                    'message' => isset($autoCreatedClient) 
+                        ? '⚠️ Factura sincronizada. Se creó automáticamente un cliente archivado con CUIT ' . $receiverDocument . '. Debes completar sus datos en la sección de Clientes Archivados antes de poder emitirle facturas.' 
+                        : 'Factura sincronizada correctamente.',
                 ]);
             } else {
                 return response()->json([
@@ -934,6 +976,7 @@ class InvoiceController extends Controller
 
             $imported = [];
             $summary = [];
+            $autoCreatedClientsCount = 0;
 
             // Fetch all existing invoices in batch to avoid N queries
             $existingInvoices = Invoice::where('issuer_company_id', $company->id)
@@ -965,7 +1008,21 @@ class InvoiceController extends Controller
                         for ($num = $lastAfipNumber; $num > 0; $num--) {
                             if ($consecutiveOld >= $maxConsecutiveOld) break;
                             try {
-                                $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
+                                Log::info('🔍 CALLING AFIP consultInvoice', [
+                'issuer_cuit' => $company->national_id,
+                'invoice_type_code' => $invoiceTypeCode,
+                'sales_point' => $salesPoint,
+                'voucher_number' => $num,
+            ]);
+            
+            $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
+            
+            Log::info('📥 AFIP RESPONSE RECEIVED', [
+                'found' => $afipData['found'] ?? false,
+                'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
+                'cae' => $afipData['cae'] ?? 'NULL',
+                'issue_date' => $afipData['issue_date'] ?? 'NULL',
+            ]);
                                 
                                 if (!$afipData['found']) continue;
 
@@ -995,8 +1052,15 @@ class InvoiceController extends Controller
                                     $receiverDocument = null;
                                     
                                     if (isset($afipData['doc_number']) && $afipData['doc_number'] !== '0') {
-                                        $receiverDocument = $afipData['doc_number'];
+                                        // AFIP devuelve CUIT sin guiones (20123456789)
                                         $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
+                                        $receiverDocument = $this->formatCuitWithHyphens($normalizedCuit);
+                                        
+                                        Log::info('Processing CUIT from AFIP (bulk)', [
+                                            'afip_raw' => $afipData['doc_number'],
+                                            'normalized' => $normalizedCuit,
+                                            'formatted' => $receiverDocument,
+                                        ]);
                                         
                                         // 1. PRIORIZAR empresa conectada
                                         $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
@@ -1005,21 +1069,24 @@ class InvoiceController extends Controller
                                             $receiverCompanyId = $receiverCompany->id;
                                             $receiverName = $receiverCompany->name;
                                         } else {
-                                            // 2. Buscar cliente externo
-                                            $client = \App\Models\Client::where('company_id', $company->id)
+                                            // 2. Buscar cliente externo (incluir archivados)
+                                            $client = \App\Models\Client::withTrashed()
+                                                ->where('company_id', $company->id)
                                                 ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
                                                 ->first();
                                             
                                             if (!$client) {
                                                 $client = \App\Models\Client::create([
                                                     'company_id' => $company->id,
-                                                    'document_number' => $afipData['doc_number'],
-                                                    'business_name' => 'Cliente AFIP - ' . $afipData['doc_number'],
+                                                    'document_number' => $receiverDocument,
+                                                    'business_name' => 'Cliente AFIP - ' . $receiverDocument,
                                                     'document_type' => 'CUIT',
                                                     'tax_condition' => 'monotax',
-                                                    'address' => null, // Domicilio fiscal no disponible desde AFIP
-                                                    'created_by' => auth()->id(),
+                                                    'address' => null,
+                                                    'incomplete_data' => true,
                                                 ]);
+                                                $client->delete(); // Archivar inmediatamente
+                                                $autoCreatedClientsCount++;
                                             }
                                             
                                             $clientId = $client->id;
@@ -1027,12 +1094,27 @@ class InvoiceController extends Controller
                                         }
                                     }
 
+                                    // Verificar si se creó cliente automáticamente
+                                    $needsReview = false;
+                                    if ($clientId) {
+                                        $clientCreated = \App\Models\Client::withTrashed()
+                                            ->where('id', $clientId)
+                                            ->whereNotNull('deleted_at')
+                                            ->exists();
+                                        if ($clientCreated) {
+                                            $needsReview = true;
+                                        }
+                                    }
+                                    
+                                    // AFIP no devuelve el concepto - usar default 'products'
+                                    $concept = 'products';
+                                    
                                     $invoice = Invoice::create([
                                         'number' => $formattedNumber,
                                         'type' => $invoiceType,
                                         'sales_point' => $salesPoint,
                                         'voucher_number' => $num,
-                                        'concept' => 'products',
+                                        'concept' => $concept,
                                         'issuer_company_id' => $company->id,
                                         'receiver_company_id' => $receiverCompanyId,
                                         'client_id' => $clientId,
@@ -1050,6 +1132,8 @@ class InvoiceController extends Controller
                                         'afip_cae_due_date' => $afipData['cae_expiration'],
                                         'receiver_name' => $receiverName,
                                         'receiver_document' => $receiverDocument,
+                                        'needs_review' => $needsReview,
+                                        'synced_from_afip' => true,
                                         'created_by' => auth()->id(),
                                     ]);
                                     
@@ -1083,13 +1167,20 @@ class InvoiceController extends Controller
                 }
             }
 
+            $message = 'Sincronización completada.';
+            if ($autoCreatedClientsCount > 0) {
+                $message .= " ⚠️ Se crearon automáticamente {$autoCreatedClientsCount} cliente(s) archivado(s) desde AFIP. Debes completar sus datos en la sección 'Clientes Archivados' antes de poder emitirles facturas. Estos clientes tienen solo el CUIT y necesitan nombre, email y otros datos.";
+            }
+            
             return response()->json([
                 'success' => true,
                 'imported_count' => count($imported),
+                'auto_created_clients' => $autoCreatedClientsCount,
                 'summary' => $summary,
                 'invoices' => $imported,
                 'date_from' => $dateFrom->format('Y-m-d'),
                 'date_to' => $dateTo->format('Y-m-d'),
+                'message' => $message,
             ]);
         } catch (\Exception $e) {
             \Log::error('Sync by date range failed completely', [
@@ -1299,7 +1390,10 @@ class InvoiceController extends Controller
     public function downloadPDF($companyId, $id)
     {
         try {
-            $invoice = Invoice::with(['client', 'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'])->findOrFail($id);
+            $invoice = Invoice::with([
+                'client' => function($query) { $query->withTrashed(); },
+                'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'
+            ])->findOrFail($id);
 
             // Generar PDF on-demand siempre (por ahora para debug)
             $pdfService = new \App\Services\InvoicePdfService();
@@ -1322,7 +1416,10 @@ class InvoiceController extends Controller
     public function downloadTXT($companyId, $id)
     {
         try {
-            $invoice = Invoice::with(['client', 'items', 'issuerCompany', 'receiverCompany'])->findOrFail($id);
+            $invoice = Invoice::with([
+                'client' => function($query) { $query->withTrashed(); },
+                'items', 'issuerCompany', 'receiverCompany'
+            ])->findOrFail($id);
 
             // Generar TXT on-demand siempre (por ahora para debug)
             $pdfService = new \App\Services\InvoicePdfService();
@@ -1342,6 +1439,46 @@ class InvoiceController extends Controller
         }
     }
 
+    public function updateSyncedInvoice(Request $request, $companyId, $id)
+    {
+        $invoice = Invoice::where('issuer_company_id', $companyId)->findOrFail($id);
+        $this->authorize('update', $invoice);
+
+        if (!$invoice->synced_from_afip) {
+            return response()->json([
+                'message' => 'Solo se pueden editar facturas sincronizadas desde AFIP'
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'concept' => 'required|in:products,services,products_services',
+            'service_date_from' => 'nullable|date',
+            'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
+            'items' => 'required|array',
+            'items.*.description' => 'required|string|max:200',
+        ]);
+
+        // Solo actualizar campos descriptivos
+        $invoice->update([
+            'concept' => $validated['concept'],
+            'service_date_from' => $validated['service_date_from'] ?? null,
+            'service_date_to' => $validated['service_date_to'] ?? null,
+        ]);
+
+        // Actualizar descripciones de items
+        foreach ($validated['items'] as $index => $itemData) {
+            $item = $invoice->items()->skip($index)->first();
+            if ($item) {
+                $item->update(['description' => $itemData['description']]);
+            }
+        }
+
+        return response()->json([
+            'message' => 'Factura actualizada correctamente',
+            'invoice' => $invoice->load('items'),
+        ]);
+    }
+
     public function downloadBulk(Request $request, $companyId)
     {
         $validated = $request->validate([
@@ -1351,9 +1488,12 @@ class InvoiceController extends Controller
         ]);
 
         try {
-            $invoices = Invoice::with(['client', 'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'])
-                ->whereIn('id', $validated['invoice_ids'])
-                ->get();
+            $invoices = Invoice::with([
+                'client' => function($query) { $query->withTrashed(); },
+                'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'
+            ])
+            ->whereIn('id', $validated['invoice_ids'])
+            ->get();
 
             $pdfService = new \App\Services\InvoicePdfService();
             $zipFileName = 'facturas_' . date('Ymd_His') . '.zip';
@@ -1547,5 +1687,22 @@ class InvoiceController extends Controller
         return Company::whereIn('id', $connectedCompanyIds)
             ->whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])
             ->first();
+    }
+
+    /**
+     * Format CUIT with hyphens (XX-XXXXXXXX-X)
+     */
+    private function formatCuitWithHyphens(string $cuit): string
+    {
+        // Remove existing hyphens
+        $cleanCuit = str_replace('-', '', $cuit);
+        
+        // Add hyphens if CUIT has 11 digits
+        if (strlen($cleanCuit) === 11 && ctype_digit($cleanCuit)) {
+            return substr($cleanCuit, 0, 2) . '-' . substr($cleanCuit, 2, 8) . '-' . substr($cleanCuit, 10, 1);
+        }
+        
+        // Return as-is if not a valid 11-digit CUIT
+        return $cuit;
     }
 }

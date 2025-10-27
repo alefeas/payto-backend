@@ -13,6 +13,7 @@ Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);
 Route::post('/sync-from-afip', [InvoiceController::class, 'syncFromAfip']);
 Route::post('/download-bulk', [InvoiceController::class, 'downloadBulk']);
 Route::get('/{id}', [InvoiceController::class, 'show']);
+Route::put('/{id}/synced', [InvoiceController::class, 'updateSyncedInvoice']);
 Route::post('/{id}/cancel', [InvoiceController::class, 'cancel']);
 Route::post('/{id}/attachment', [InvoiceController::class, 'uploadAttachment']);
 Route::get('/{id}/attachment', [InvoiceController::class, 'downloadAttachment']);

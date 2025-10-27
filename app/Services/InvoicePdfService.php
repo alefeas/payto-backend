@@ -11,7 +11,14 @@ class InvoicePdfService
     public function generatePdf(Invoice $invoice): string
     {
         try {
-            $invoice->load(['issuerCompany.address', 'issuerCompany.bankAccounts', 'client', 'receiverCompany', 'items', 'perceptions']);
+            $invoice->load([
+                'issuerCompany.address', 
+                'issuerCompany.bankAccounts', 
+                'client' => function($query) { $query->withTrashed(); },
+                'receiverCompany', 
+                'items', 
+                'perceptions'
+            ]);
             
             // Generate barcode and QR if CAE exists
             $barcodeBase64 = null;
@@ -131,7 +138,12 @@ class InvoicePdfService
     
     public function generateTxt(Invoice $invoice): string
     {
-        $invoice->load(['issuerCompany', 'client', 'receiverCompany', 'items']);
+        $invoice->load([
+            'issuerCompany', 
+            'client' => function($query) { $query->withTrashed(); },
+            'receiverCompany', 
+            'items'
+        ]);
         
         $lines = [];
         $lines[] = $invoice->number;

@@ -51,6 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'update']);
     Route::post('/companies/{companyId}/clients/{clientId}/restore', [App\Http\Controllers\Api\ClientController::class, 'restore']);
     Route::delete('/companies/{companyId}/clients/{clientId}', [App\Http\Controllers\Api\ClientController::class, 'destroy']);
+    Route::delete('/companies/{companyId}/clients/{clientId}/force', [App\Http\Controllers\Api\ClientController::class, 'forceDelete']);
     
     // Supplier routes
     Route::get('/companies/{companyId}/suppliers', [App\Http\Controllers\Api\SupplierController::class, 'index']);

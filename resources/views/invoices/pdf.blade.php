@@ -36,6 +36,14 @@
                ($invoice->type === 'NDA' || $invoice->type === 'NDB' || $invoice->type === 'NDC' ? 'NOTA DE DÉBITO ELECTRÓNICA' : 'FACTURA ELECTRÓNICA') }}</h2>
         <p><strong>Nº {{ $invoice->number }}</strong></p>
         <p style="font-size: 10px; margin-top: 5px;">(Comprobante Autorizado por AFIP)</p>
+        @if($invoice->synced_from_afip)
+        <div style="background: #fef3c7; border: 1px solid #fbbf24; padding: 6px; margin-top: 8px; border-radius: 4px;">
+            <p style="font-size: 9px; margin: 0; color: #92400e;">
+                <strong>AVISO:</strong> Comprobante reconstruido desde datos de AFIP/ARCA.<br>
+                Información disponible: totales, CAE y fecha. Para el PDF oficial, solicitarlo al emisor.
+            </p>
+        </div>
+        @endif
     </div>
 
     <div class="company-info">
@@ -51,21 +59,21 @@
 
     <div class="client-info">
         <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 13px;">Datos del Cliente</h4>
+        @if($client && !$client->incomplete_data)
         <p style="margin: 5px 0;"><strong>Razón Social:</strong> 
+            {{ $client->business_name ?? $client->name ?? ($client->first_name . ' ' . $client->last_name) }}
+        </p>
+        @endif
+        <p style="margin: 5px 0;"><strong>CUIT:</strong> 
             @if($client)
-                {{ $client->business_name ?? $client->name ?? ($client->first_name . ' ' . $client->last_name) }}
+                {{ $client->document_number ?? $client->national_id ?? 'N/A' }}
+            @elseif($invoice->receiver_document)
+                {{ $invoice->receiver_document }}
             @else
-                {{ $invoice->receiver_name ?? 'Cliente' }}
+                N/A
             @endif
         </p>
-        <p style="margin: 5px 0;"><strong>{{ ($client->tax_condition ?? '') === 'final_consumer' ? 'DNI' : 'CUIT' }}:</strong> 
-            @if($client)
-                {{ $client->document_number ?? $client->national_id }}
-            @else
-                {{ $invoice->receiver_document ?? 'N/A' }}
-            @endif
-        </p>
-        @if($client)
+        @if($client && !$client->incomplete_data)
         <p style="margin: 5px 0;"><strong>Condición IVA:</strong> 
         @php
             $taxConditions = [

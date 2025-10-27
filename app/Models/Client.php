@@ -25,11 +25,13 @@ class Client extends Model
         'city',
         'province',
         'tax_condition',
+        'incomplete_data',
     ];
 
     protected $casts = [
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
+        'incomplete_data' => 'boolean',
     ];
 
     public function company()

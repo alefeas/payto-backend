@@ -53,6 +53,18 @@ class InvoicePolicy
         ]);
     }
 
+    public function update(User $user, Invoice $invoice): bool
+    {
+        $member = $invoice->issuerCompany->members()->where('user_id', $user->id)->first();
+        
+        return $member && in_array($member->role, [
+            'owner',
+            'administrator',
+            'financial_director',
+            'accountant',
+        ]);
+    }
+
     public function delete(User $user, Invoice $invoice): bool
     {
         $member = $invoice->issuerCompany->members()->where('user_id', $user->id)->first();

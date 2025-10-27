@@ -48,6 +48,13 @@ class ClientController extends Controller
             ->onlyTrashed()
             ->findOrFail($clientId);
 
+        if ($client->incomplete_data) {
+            return $this->error(
+                'No se puede restaurar este cliente porque tiene datos incompletos. Debes completar al menos: nombre/razón social, email o teléfono, y condición fiscal correcta.',
+                422
+            );
+        }
+
         $client->restore();
 
         return $this->success($client, 'Cliente restaurado correctamente');
@@ -113,7 +120,7 @@ class ClientController extends Controller
         $company = Company::findOrFail($companyId);
         $this->authorize('update', [Client::class, $company]);
 
-        $client = Client::where('company_id', $companyId)->findOrFail($clientId);
+        $client = Client::where('company_id', $companyId)->withTrashed()->findOrFail($clientId);
 
         $validated = $request->validate([
             'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
@@ -177,6 +184,16 @@ class ClientController extends Controller
 
         $client->update($validated);
 
+        // Si el cliente tenía datos incompletos y ahora tiene los datos mínimos, quitar el flag
+        if ($client->incomplete_data) {
+            $hasName = !empty($client->business_name) || (!empty($client->first_name) && !empty($client->last_name));
+            $hasContact = !empty($client->email) || !empty($client->phone);
+            
+            if ($hasName && $hasContact) {
+                $client->update(['incomplete_data' => false]);
+            }
+        }
+
         return $this->success($client, 'Client updated successfully');
     }
 
@@ -192,5 +209,50 @@ class ClientController extends Controller
         $client->delete();
 
         return $this->success(null, 'Cliente archivado correctamente');
+    }
+
+    public function forceDelete(Request $request, string $companyId, string $clientId): JsonResponse
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('delete', [Client::class, $company]);
+
+        $client = Client::where('company_id', $companyId)
+            ->withTrashed()
+            ->findOrFail($clientId);
+
+        // Check if client has invoices (bypass con ?force=true para testing)
+        $forceBypass = $request->query('force') === 'true';
+        if (!$forceBypass) {
+            $hasInvoices = \App\Models\Invoice::where('client_id', $clientId)->exists();
+            
+            if ($hasInvoices) {
+                return $this->error(
+                    'No se puede eliminar permanentemente un cliente con facturas asociadas. Esto afectaría el Libro IVA.',
+                    422
+                );
+            }
+        } else {
+            // Si force=true, desactivar foreign key checks temporalmente
+            \DB::statement('SET FOREIGN_KEY_CHECKS=0;');
+            
+            // Eliminar facturas y sus relaciones
+            $invoices = \App\Models\Invoice::where('client_id', $clientId)->withTrashed()->get();
+            foreach ($invoices as $invoice) {
+                $invoice->forceDelete();
+            }
+            
+            // Eliminar cliente
+            $client->forceDelete();
+            
+            // Reactivar foreign key checks
+            \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
+            
+            return $this->success(null, 'Cliente eliminado permanentemente');
+        }
+
+        // Permanent delete
+        $client->forceDelete();
+
+        return $this->success(null, 'Cliente eliminado permanentemente');
     }
 }

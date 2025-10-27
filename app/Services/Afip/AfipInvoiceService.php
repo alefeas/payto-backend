@@ -742,6 +742,15 @@ class AfipInvoiceService
             }
 
             $invoice = $result->ResultGet;
+            
+            // DEBUG: Log completo de la respuesta de AFIP
+            Log::info('AFIP FECompConsultar raw response', [
+                'DocTipo' => $invoice->DocTipo ?? 'NULL',
+                'DocNro' => $invoice->DocNro ?? 'NULL',
+                'DocNro_type' => gettype($invoice->DocNro ?? null),
+                'DocNro_length' => isset($invoice->DocNro) ? strlen((string)$invoice->DocNro) : 0,
+                'full_invoice_data' => json_encode($invoice, JSON_PRETTY_PRINT),
+            ]);
 
             $issueDate = isset($invoice->CbteFch) ? Carbon::createFromFormat('Ymd', $invoice->CbteFch)->format('Y-m-d') : null;
             $dueDate = $issueDate ? Carbon::parse($issueDate)->addDays(30)->format('Y-m-d') : null;
@@ -761,6 +770,15 @@ class AfipInvoiceService
                 'exchange_rate' => $exchangeRate,
             ]);
 
+            // AFIP puede devolver CUIT con o sin guiones dependiendo de cómo se cargó originalmente
+            $rawDocNumber = $invoice->DocNro ?? null;
+            $normalizedDocNumber = $rawDocNumber ? $this->cleanDocumentNumber($rawDocNumber) : null;
+            
+            Log::info('AFIP returned document number', [
+                'raw_doc_number' => $rawDocNumber,
+                'normalized' => $normalizedDocNumber,
+            ]);
+
             return [
                 'found' => true,
                 'cae' => $invoice->CodAutorizacion ?? null,
@@ -768,7 +786,7 @@ class AfipInvoiceService
                 'issue_date' => $issueDate,
                 'due_date' => $dueDate,
                 'doc_type' => $invoice->DocTipo ?? null,
-                'doc_number' => $invoice->DocNro ?? null,
+                'doc_number' => $normalizedDocNumber,
                 'subtotal' => $invoice->ImpNeto ?? 0,
                 'total_taxes' => $invoice->ImpIVA ?? 0,
                 'total_perceptions' => $invoice->ImpTrib ?? 0,
