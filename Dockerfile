@@ -20,8 +20,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Set working directory
 WORKDIR /var/www/html
 
-# Copy application files
-COPY . .
+# Copy application files (excluding start.sh to copy it separately)
+COPY --exclude=start.sh . .
 
 # Install dependencies
 RUN composer install --no-dev --optimize-autoloader
@@ -40,18 +40,8 @@ RUN echo '<Directory /var/www/html/public>\n\
     Require all granted\n\
 </Directory>' >> /etc/apache2/apache2.conf
 
-# Create startup script
-COPY <<EOF /usr/local/bin/start.sh
-#!/bin/bash
-set -e
-php artisan config:clear
-php artisan cache:clear
-php artisan migrate --force
-sed -i "s/Listen 80/Listen \${PORT:-80}/g" /etc/apache2/ports.conf
-sed -i "s/:80/:\${PORT:-80}/g" /etc/apache2/sites-available/000-default.conf
-exec apache2-foreground
-EOF
-
+# Copy and setup startup script
+COPY start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh
 
 CMD ["/usr/local/bin/start.sh"]
