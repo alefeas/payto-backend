@@ -44,9 +44,9 @@ RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available
 # Create entrypoint script
 RUN echo '#!/bin/bash\n\
 set -e\n\
-php artisan config:clear\n\
-php artisan cache:clear\n\
-php artisan migrate --force\n\
+php artisan config:clear || true\n\
+php artisan cache:clear || true\n\
+php artisan migrate --force || true\n\
 exec apache2-foreground' > /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-entrypoint.sh
 
