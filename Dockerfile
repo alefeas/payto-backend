@@ -20,8 +20,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Set working directory
 WORKDIR /var/www/html
 
-# Copy application files (excluding start.sh to copy it separately)
-COPY --exclude=start.sh . .
+# Copy application files
+COPY . .
 
 # Install dependencies
 RUN composer install --no-dev --optimize-autoloader
@@ -32,16 +32,24 @@ RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cac
 # Enable Apache mod_rewrite
 RUN a2enmod rewrite
 
-# Configure Apache
-RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf
-RUN echo '<Directory /var/www/html/public>\n\
+# Configure Apache DocumentRoot and ServerName
+RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf && \
+    echo 'ServerName localhost' >> /etc/apache2/apache2.conf && \
+    echo '<Directory /var/www/html/public>\n\
     Options Indexes FollowSymLinks\n\
     AllowOverride All\n\
     Require all granted\n\
 </Directory>' >> /etc/apache2/apache2.conf
 
-# Copy and setup startup script
-COPY start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
+# Create entrypoint script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+php artisan config:clear\n\
+php artisan cache:clear\n\
+php artisan migrate --force\n\
+exec apache2-foreground' > /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
 
-CMD ["/usr/local/bin/start.sh"]
+EXPOSE 80
+
+CMD ["/usr/local/bin/docker-entrypoint.sh"]
