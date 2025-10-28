@@ -4,14 +4,12 @@ namespace App\Services;
 
 use App\Exceptions\UnauthorizedException;
 use App\Interfaces\AuthServiceInterface;
-use App\Mail\ResetPassword;
-use App\Mail\VerificationCode;
 use App\Models\PasswordReset;
 use App\Models\PendingRegistration;
 use App\Models\User;
+use App\Services\BrevoEmailService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 
 class AuthService implements AuthServiceInterface
@@ -43,7 +41,9 @@ class AuthService implements AuthServiceInterface
 
         // Enviar código por email
         $userName = trim(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? '')) ?: 'Usuario';
-        Mail::to($data['email'])->send(new VerificationCode($userName, $code));
+        $emailService = new BrevoEmailService();
+        $htmlContent = view('emails.verification-code', ['userName' => $userName, 'code' => $code])->render();
+        $emailService->send($data['email'], 'Código de verificación - PayTo', $htmlContent);
 
         return [
             'message' => 'Código de verificación enviado a tu email',
@@ -186,7 +186,9 @@ class AuthService implements AuthServiceInterface
         // Enviar nuevo código
         $userData = $pending->user_data ?? [];
         $userName = trim(($userData['first_name'] ?? '') . ' ' . ($userData['last_name'] ?? '')) ?: 'Usuario';
-        Mail::to($email)->send(new VerificationCode($userName, $code));
+        $emailService = new BrevoEmailService();
+        $htmlContent = view('emails.verification-code', ['userName' => $userName, 'code' => $code])->render();
+        $emailService->send($email, 'Código de verificación - PayTo', $htmlContent);
 
         return true;
     }
@@ -215,7 +217,9 @@ class AuthService implements AuthServiceInterface
         $resetUrl = config('app.frontend_url') . '/reset-password?token=' . $token;
         $userName = trim($user->first_name . ' ' . $user->last_name) ?: 'Usuario';
 
-        Mail::to($user->email)->send(new ResetPassword($userName, $resetUrl));
+        $emailService = new BrevoEmailService();
+        $htmlContent = view('emails.reset-password', ['userName' => $userName, 'resetUrl' => $resetUrl])->render();
+        $emailService->send($user->email, 'Recuperá tu contraseña - PayTo', $htmlContent);
 
         return true;
     }
