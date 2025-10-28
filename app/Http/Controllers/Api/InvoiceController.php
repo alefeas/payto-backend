@@ -1390,15 +1390,25 @@ class InvoiceController extends Controller
     public function downloadPDF($companyId, $id)
     {
         try {
+            Log::info('PDF download requested', ['company_id' => $companyId, 'invoice_id' => $id]);
+            
             $invoice = Invoice::with([
                 'client' => function($query) { $query->withTrashed(); },
                 'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'
             ])->findOrFail($id);
 
+            Log::info('Invoice loaded, generating PDF');
+            
             // Generar PDF on-demand siempre (por ahora para debug)
             $pdfService = new \App\Services\InvoicePdfService();
             $pdfPath = $pdfService->generatePdf($invoice);
             $filePath = storage_path('app/' . $pdfPath);
+            
+            Log::info('PDF generated', ['path' => $pdfPath, 'exists' => file_exists($filePath)]);
+            
+            if (!file_exists($filePath)) {
+                throw new \Exception('PDF file not found after generation');
+            }
             
             // Update invoice with new path
             $invoice->update(['pdf_url' => $pdfPath]);
@@ -1406,6 +1416,8 @@ class InvoiceController extends Controller
             return response()->download($filePath, "factura-{$invoice->number}.pdf");
         } catch (\Exception $e) {
             Log::error('Error downloading PDF', [
+                'company_id' => $companyId,
+                'invoice_id' => $id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -1456,13 +1468,19 @@ class InvoiceController extends Controller
             'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
             'items' => 'required|array',
             'items.*.description' => 'required|string|max:200',
+        ], [
+            'service_date_to.after_or_equal' => 'La fecha de fin del servicio debe ser igual o posterior a la fecha de inicio',
         ]);
 
         // Solo actualizar campos descriptivos
+        // Si el concepto es 'products', forzar fechas de servicio a null
+        $serviceDateFrom = $validated['concept'] === 'products' ? null : (!empty($validated['service_date_from']) ? $validated['service_date_from'] : null);
+        $serviceDateTo = $validated['concept'] === 'products' ? null : (!empty($validated['service_date_to']) ? $validated['service_date_to'] : null);
+        
         $invoice->update([
             'concept' => $validated['concept'],
-            'service_date_from' => $validated['service_date_from'] ?? null,
-            'service_date_to' => $validated['service_date_to'] ?? null,
+            'service_date_from' => $serviceDateFrom,
+            'service_date_to' => $serviceDateTo,
         ]);
 
         // Actualizar descripciones de items

@@ -71,12 +71,12 @@ class Invoice extends Model
     ];
 
     protected $casts = [
-        'issue_date' => 'date:Y-m-d',
-        'due_date' => 'date:Y-m-d',
-        'service_date_from' => 'date:Y-m-d',
-        'service_date_to' => 'date:Y-m-d',
-        'payment_due_date' => 'date:Y-m-d',
-        'afip_cae_due_date' => 'date:Y-m-d',
+        'issue_date' => 'immutable_date',
+        'due_date' => 'immutable_date',
+        'service_date_from' => 'immutable_date',
+        'service_date_to' => 'immutable_date',
+        'payment_due_date' => 'immutable_date',
+        'afip_cae_due_date' => 'immutable_date',
         'approval_date' => 'datetime',
         'acceptance_date' => 'datetime',
         'rejected_at' => 'datetime',

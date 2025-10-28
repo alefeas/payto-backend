@@ -17,6 +17,8 @@ class InvoicePerception extends Model
         'type',
         'name',
         'rate',
+        'base_type',
+        'jurisdiction',
         'base_amount',
         'amount',
     ];
