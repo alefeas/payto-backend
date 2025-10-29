@@ -121,26 +121,6 @@ class AfipCertificateService
             throw new \Exception('No se pudo leer el certificado. Verifica que sea un archivo .crt válido de AFIP.');
         }
         
-        // Validar que el ambiente seleccionado coincida con el tipo de certificado
-        $issuer = $certData['issuer']['CN'] ?? '';
-        $isTestingCert = stripos($issuer, 'homologacion') !== false || stripos($issuer, 'testing') !== false;
-        
-        if ($environment === 'production' && $isTestingCert) {
-            throw new \Exception(
-                'Este certificado es de HOMOLOGACIÓN/TESTING de AFIP. '
-                . 'No puedes marcarlo como "Producción". '
-                . 'Selecciona "Homologación" en el formulario.'
-            );
-        }
-        
-        if ($environment === 'testing' && !$isTestingCert) {
-            throw new \Exception(
-                'Este certificado es de PRODUCCIÓN de AFIP. '
-                . 'No puedes marcarlo como "Homologación". '
-                . 'Selecciona "Producción" en el formulario o las facturas NO se emitirán realmente en AFIP.'
-            );
-        }
-        
         // Extract CUIT from certificate
         $subject = $certData['subject'];
         $certCuit = null;
@@ -263,26 +243,6 @@ class AfipCertificateService
         
         if (!$certData) {
             throw new \Exception('No se pudo leer el certificado.');
-        }
-        
-        // Validar que el ambiente seleccionado coincida con el tipo de certificado
-        $issuer = $certData['issuer']['CN'] ?? '';
-        $isTestingCert = stripos($issuer, 'homologacion') !== false || stripos($issuer, 'testing') !== false;
-        
-        if ($environment === 'production' && $isTestingCert) {
-            throw new \Exception(
-                'Este certificado es de HOMOLOGACIÓN/TESTING de AFIP. '
-                . 'No puedes marcarlo como "Producción". '
-                . 'Selecciona "Homologación" en el formulario.'
-            );
-        }
-        
-        if ($environment === 'testing' && !$isTestingCert) {
-            throw new \Exception(
-                'Este certificado es de PRODUCCIÓN de AFIP. '
-                . 'No puedes marcarlo como "Homologación". '
-                . 'Selecciona "Producción" en el formulario o las facturas NO se emitirán realmente en AFIP.'
-            );
         }
         
         if (!str_contains($privateKeyContent, 'BEGIN') || !str_contains($privateKeyContent, 'PRIVATE KEY')) {
