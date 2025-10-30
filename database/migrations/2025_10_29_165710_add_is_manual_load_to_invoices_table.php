@@ -12,7 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('invoices', function (Blueprint $table) {
-            $table->boolean('is_manual_load')->default(false)->after('synced_from_afip');
+            if (!Schema::hasColumn('invoices', 'is_manual_load')) {
+                $table->boolean('is_manual_load')->default(false)->after('synced_from_afip');
+            }
         });
     }
 
@@ -22,7 +24,9 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('invoices', function (Blueprint $table) {
-            $table->dropColumn('is_manual_load');
+            if (Schema::hasColumn('invoices', 'is_manual_load')) {
+                $table->dropColumn('is_manual_load');
+            }
         });
     }
 };
