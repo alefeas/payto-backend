@@ -9,14 +9,18 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('invoices', function (Blueprint $table) {
-            $table->boolean('synced_from_afip')->default(false)->after('needs_review');
+            if (!Schema::hasColumn('invoices', 'synced_from_afip')) {
+                $table->boolean('synced_from_afip')->default(false)->after('needs_review');
+            }
         });
     }
 
     public function down(): void
     {
         Schema::table('invoices', function (Blueprint $table) {
-            $table->dropColumn('synced_from_afip');
+            if (Schema::hasColumn('invoices', 'synced_from_afip')) {
+                $table->dropColumn('synced_from_afip');
+            }
         });
     }
 };
