@@ -1422,10 +1422,24 @@ class InvoiceController extends Controller
 
     public function storeManualReceived(Request $request, $companyId)
     {
-        $company = Company::findOrFail($companyId);
-        $this->authorize('create', [Invoice::class, $company]);
-        
-        Log::info('storeManualReceived request data', $request->all());
+        try {
+            Log::info('=== storeManualReceived START ===', [
+                'company_id' => $companyId,
+                'request_data' => $request->all(),
+                'headers' => $request->headers->all(),
+            ]);
+            
+            $company = Company::findOrFail($companyId);
+            $this->authorize('create', [Invoice::class, $company]);
+            
+            Log::info('Authorization passed, starting validation');
+        } catch (\Exception $e) {
+            Log::error('Error before validation', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
 
         $validated = $request->validate([
             'issuer_company_id' => 'nullable|string',
