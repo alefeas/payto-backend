@@ -1913,7 +1913,10 @@ class InvoiceController extends Controller
             $invoice = Invoice::with([
                 'client' => function($query) { $query->withTrashed(); },
                 'supplier' => function($query) { $query->withTrashed(); },
-                'items', 'issuerCompany.address', 'receiverCompany.address', 'perceptions'
+                'items', 
+                'issuerCompany', 
+                'receiverCompany', 
+                'perceptions'
             ])->findOrFail($id);
 
             // Verificar que la empresa tenga acceso a esta factura

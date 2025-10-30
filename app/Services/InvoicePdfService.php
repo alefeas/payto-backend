@@ -11,21 +11,52 @@ class InvoicePdfService
     public function generatePdf(Invoice $invoice): string
     {
         try {
-            $invoice->load([
-                'issuerCompany.address', 
-                'issuerCompany.bankAccounts', 
-                'client' => function($query) { $query->withTrashed(); },
-                'supplier' => function($query) { $query->withTrashed(); },
-                'receiverCompany.address', 
-                'items', 
-                'perceptions'
+            \Log::info('PDF Generation Start', [
+                'invoice_id' => $invoice->id,
+                'is_manual_load' => $invoice->is_manual_load,
+                'manual_supplier' => $invoice->manual_supplier ?? false,
+                'has_issuer_company' => $invoice->issuer_company_id ? true : false,
+                'has_supplier' => $invoice->supplier_id ? true : false,
             ]);
             
-            // Generate barcode and QR if CAE exists
+            // Load relationships conditionally
+            $with = [
+                'client' => function($query) { $query->withTrashed(); },
+                'supplier' => function($query) { $query->withTrashed(); },
+                'items', 
+                'perceptions'
+            ];
+            
+            // Only load issuerCompany if it exists
+            if ($invoice->issuer_company_id && !$invoice->manual_supplier) {
+                $with['issuerCompany.address'] = function($query) {};
+                $with['issuerCompany.bankAccounts'] = function($query) {};
+            }
+            
+            // Only load receiverCompany if it exists
+            if ($invoice->receiver_company_id) {
+                $with['receiverCompany.address'] = function($query) {};
+            }
+            
+            $invoice->load($with);
+            
+            \Log::info('Relationships loaded', [
+                'has_issuerCompany' => $invoice->issuerCompany ? true : false,
+                'has_supplier' => $invoice->supplier ? true : false,
+                'has_client' => $invoice->client ? true : false,
+                'items_count' => $invoice->items->count(),
+            ]);
+            
+            // Generate barcode and QR if CAE exists (only for non-manual invoices)
             $barcodeBase64 = null;
             $qrBase64 = null;
-            if ($invoice->afip_cae) {
-                $barcodeBase64 = $this->generateAfipBarcode($invoice);
+            if ($invoice->afip_cae && $invoice->issuerCompany) {
+                try {
+                    $barcodeBase64 = $this->generateAfipBarcode($invoice);
+                } catch (\Exception $e) {
+                    \Log::warning('Could not generate barcode', ['error' => $e->getMessage()]);
+                    $barcodeBase64 = null;
+                }
                 try {
                     $qrBase64 = $this->generateAfipQR($invoice);
                 } catch (\Exception $e) {
@@ -45,7 +76,7 @@ class InvoicePdfService
             }
             
             // For manual received invoices, we need to handle the company/client differently
-            $company = $invoice->issuerCompany;
+            $company = $invoice->issuerCompany ?? null;
             $client = $clientOrReceiver;
             
             // If this is a manual received invoice, the "issuer" in the PDF should be the supplier
@@ -83,7 +114,7 @@ class InvoicePdfService
             $data = [
                 'invoice' => $invoice,
                 'company' => $company,
-                'address' => $company->address ?? null,
+                'address' => $company ? ($company->address ?? null) : null,
                 'client' => $client,
                 'barcodeBase64' => $barcodeBase64,
                 'qrBase64' => $qrBase64,
@@ -110,7 +141,10 @@ class InvoicePdfService
             return $path;
         } catch (\Exception $e) {
             \Log::error('Error generating PDF', [
+                'invoice_id' => $invoice->id ?? 'unknown',
                 'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => basename($e->getFile()),
                 'trace' => $e->getTraceAsString()
             ]);
             throw $e;

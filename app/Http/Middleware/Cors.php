@@ -21,11 +21,19 @@ class Cors
 
         $response = $next($request);
 
-        // Add CORS headers to all responses
-        return $response
-            ->header('Access-Control-Allow-Origin', '*')
-            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
-            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
-            ->header('Access-Control-Max-Age', '86400');
+        // Add CORS headers - use headers->set() for BinaryFileResponse
+        if ($response instanceof \Symfony\Component\HttpFoundation\BinaryFileResponse) {
+            $response->headers->set('Access-Control-Allow-Origin', '*');
+            $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+            $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+            $response->headers->set('Access-Control-Max-Age', '86400');
+        } else {
+            $response->header('Access-Control-Allow-Origin', '*')
+                ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+                ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
+                ->header('Access-Control-Max-Age', '86400');
+        }
+        
+        return $response;
     }
 }
