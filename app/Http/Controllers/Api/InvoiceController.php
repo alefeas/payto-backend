@@ -1442,9 +1442,10 @@ class InvoiceController extends Controller
         }
 
         $validated = $request->validate([
+            'supplier_id' => 'nullable|exists:suppliers,id',
             'issuer_company_id' => 'nullable|string',
-            'supplier_name' => 'required_without:issuer_company_id|string|max:200',
-            'supplier_document' => 'required_without:issuer_company_id|string|max:20',
+            'supplier_name' => 'required_without_all:issuer_company_id,supplier_id|string|max:200',
+            'supplier_document' => 'required_without_all:issuer_company_id,supplier_id|string|max:20',
             'invoice_type' => 'required|string',
             'invoice_number' => 'nullable|string|max:50',
             'number' => 'nullable|string|max:50',
@@ -1582,12 +1583,20 @@ class InvoiceController extends Controller
             $supplierId = null;
             $issuerCompanyId = null;
             
-            if (!empty($validated['issuer_company_id'])) {
+            if (!empty($validated['supplier_id'])) {
+                // Using existing supplier
+                $supplier = \App\Models\Supplier::findOrFail($validated['supplier_id']);
+                $supplierId = $supplier->id;
+                $supplierName = $supplier->business_name ?? trim($supplier->first_name . ' ' . $supplier->last_name);
+                $supplierDocument = $supplier->document_number;
+            } elseif (!empty($validated['issuer_company_id'])) {
+                // Using connected company
                 $issuerCompany = Company::findOrFail($validated['issuer_company_id']);
                 $supplierName = $issuerCompany->name;
                 $supplierDocument = $issuerCompany->national_id;
                 $issuerCompanyId = $issuerCompany->id;
             } else {
+                // Manual supplier data
                 $supplierName = $validated['supplier_name'] ?? null;
                 $supplierDocument = $validated['supplier_document'] ?? null;
             }
