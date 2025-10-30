@@ -1672,11 +1672,18 @@ class InvoiceController extends Controller
             Log::error('Manual received invoice creation failed', [
                 'company_id' => $companyId,
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
             ]);
 
             return response()->json([
                 'message' => 'Error al crear la factura recibida',
                 'error' => $e->getMessage(),
+                'debug' => [
+                    'line' => $e->getLine(),
+                    'file' => basename($e->getFile()),
+                ]
             ], 500);
         }
     }
