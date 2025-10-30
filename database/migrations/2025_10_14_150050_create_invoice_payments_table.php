@@ -11,9 +11,29 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('invoice_payments', function (Blueprint $table) {
-            $table->id();
-            $table->timestamps();
+        if (!Schema::hasTable('invoice_payments')) {
+            Schema::create('invoice_payments', function (Blueprint $table) {
+                $table->id();
+                $table->timestamps();
+            });
+        }
+
+        Schema::table('invoice_payments', function (Blueprint $table) {
+            if (!Schema::hasColumn('invoice_payments', 'invoice_id')) {
+                $table->foreignId('invoice_id')->constrained()->onDelete('cascade');
+            }
+            if (!Schema::hasColumn('invoice_payments', 'amount')) {
+                $table->decimal('amount', 15, 2);
+            }
+            if (!Schema::hasColumn('invoice_payments', 'payment_date')) {
+                $table->date('payment_date');
+            }
+            if (!Schema::hasColumn('invoice_payments', 'payment_method')) {
+                $table->string('payment_method')->nullable();
+            }
+            if (!Schema::hasColumn('invoice_payments', 'notes')) {
+                $table->text('notes')->nullable();
+            }
         });
     }
 
