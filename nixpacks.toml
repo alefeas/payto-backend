@@ -1,2 +1,5 @@
 [phases.setup]
-aptPkgs = ['php8.3-soap']
+aptPkgs = ['libxml2-dev']
+
+[phases.install]
+cmds = ['docker-php-ext-install soap']
