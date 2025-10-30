@@ -77,6 +77,16 @@ class CollectionController extends Controller
             'notes' => 'nullable|string',
             'status' => 'nullable|in:pending_confirmation,confirmed,rejected',
             'from_network' => 'nullable|boolean',
+            'withholding_iibb' => 'nullable|numeric|min:0',
+            'withholding_iibb_notes' => 'nullable|string',
+            'withholding_iva' => 'nullable|numeric|min:0',
+            'withholding_iva_notes' => 'nullable|string',
+            'withholding_ganancias' => 'nullable|numeric|min:0',
+            'withholding_ganancias_notes' => 'nullable|string',
+            'withholding_suss' => 'nullable|numeric|min:0',
+            'withholding_suss_notes' => 'nullable|string',
+            'withholding_other' => 'nullable|numeric|min:0',
+            'withholding_other_notes' => 'nullable|string',
         ]);
 
         $validated['company_id'] = $companyId;

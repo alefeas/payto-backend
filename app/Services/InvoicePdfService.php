@@ -16,7 +16,7 @@ class InvoicePdfService
                 'issuerCompany.bankAccounts', 
                 'client' => function($query) { $query->withTrashed(); },
                 'supplier' => function($query) { $query->withTrashed(); },
-                'receiverCompany', 
+                'receiverCompany.address', 
                 'items', 
                 'perceptions'
             ]);
@@ -41,7 +41,6 @@ class InvoicePdfService
             } elseif ($invoice->receiverCompany) {
                 $clientOrReceiver = $invoice->receiverCompany;
             } elseif ($invoice->supplier) {
-                // For manual received invoices, supplier is the issuer
                 $clientOrReceiver = $invoice->supplier;
             }
             
@@ -52,11 +51,28 @@ class InvoicePdfService
             // If this is a manual received invoice, the "issuer" in the PDF should be the supplier
             if ($invoice->is_manual_load && $invoice->supplier) {
                 // Create a mock company object from supplier data for PDF display
+                $supplierAddress = null;
+                if ($invoice->supplier->address) {
+                    $supplierAddress = (object) [
+                        'street' => $invoice->supplier->address,
+                        'street_number' => '',
+                        'floor' => null,
+                        'apartment' => null,
+                        'city' => '',
+                        'province' => '',
+                        'postal_code' => '',
+                        'country' => 'Argentina',
+                    ];
+                }
+                
                 $supplierAsCompany = (object) [
                     'name' => $invoice->supplier->business_name ?? trim($invoice->supplier->first_name . ' ' . $invoice->supplier->last_name),
                     'national_id' => $invoice->supplier->document_number,
-                    'address' => null, // Suppliers don't have address in our model
-                    'bankAccounts' => collect([]), // Empty collection
+                    'address' => $supplierAddress,
+                    'email' => $invoice->supplier->email ?? null,
+                    'phone' => $invoice->supplier->phone ?? null,
+                    'tax_condition' => $invoice->supplier->tax_condition ?? null,
+                    'bankAccounts' => collect([]),
                 ];
                 $company = $supplierAsCompany;
                 

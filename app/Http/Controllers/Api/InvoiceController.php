@@ -546,7 +546,7 @@ class InvoiceController extends Controller
             ->with([
                 'client' => function($query) { $query->withTrashed(); },
                 'supplier' => function($query) { $query->withTrashed(); },
-                'items', 'receiverCompany', 'issuerCompany', 'perceptions'
+                'items', 'receiverCompany', 'issuerCompany', 'perceptions', 'collections'
             ])
             ->findOrFail($id);
 
@@ -569,6 +569,21 @@ class InvoiceController extends Controller
                     ?: null;
                 $invoice->receiver_document = $invoice->client->document_number;
             }
+        }
+        
+        // Agregar retenciones desde collections confirmadas
+        $confirmedCollections = $invoice->collections->where('status', 'confirmed');
+        if ($confirmedCollections->isNotEmpty()) {
+            $invoice->withholding_iibb = $confirmedCollections->sum('withholding_iibb');
+            $invoice->withholding_iibb_notes = $confirmedCollections->whereNotNull('withholding_iibb_notes')->pluck('withholding_iibb_notes')->filter()->implode(', ');
+            $invoice->withholding_iva = $confirmedCollections->sum('withholding_iva');
+            $invoice->withholding_iva_notes = $confirmedCollections->whereNotNull('withholding_iva_notes')->pluck('withholding_iva_notes')->filter()->implode(', ');
+            $invoice->withholding_ganancias = $confirmedCollections->sum('withholding_ganancias');
+            $invoice->withholding_ganancias_notes = $confirmedCollections->whereNotNull('withholding_ganancias_notes')->pluck('withholding_ganancias_notes')->filter()->implode(', ');
+            $invoice->withholding_suss = $confirmedCollections->sum('withholding_suss');
+            $invoice->withholding_suss_notes = $confirmedCollections->whereNotNull('withholding_suss_notes')->pluck('withholding_suss_notes')->filter()->implode(', ');
+            $invoice->withholding_other = $confirmedCollections->sum('withholding_other');
+            $invoice->withholding_other_notes = $confirmedCollections->whereNotNull('withholding_other_notes')->pluck('withholding_other_notes')->filter()->implode(', ');
         }
 
         return response()->json($invoice);
@@ -1413,9 +1428,9 @@ class InvoiceController extends Controller
         Log::info('storeManualReceived request data', $request->all());
 
         $validated = $request->validate([
-            'supplier_id' => 'nullable|exists:suppliers,id',
-            'supplier_name' => 'required_without:supplier_id|string|max:200',
-            'supplier_document' => 'required_without:supplier_id|string|max:20',
+            'issuer_company_id' => 'nullable|string',
+            'supplier_name' => 'required_without:issuer_company_id|string|max:200',
+            'supplier_document' => 'required_without:issuer_company_id|string|max:20',
             'invoice_type' => 'required|string',
             'invoice_number' => 'nullable|string|max:50',
             'number' => 'nullable|string|max:50',
@@ -1477,6 +1492,14 @@ class InvoiceController extends Controller
             'items.*.tax_rate.max' => 'La tasa de impuesto no puede superar el 100%.',
         ]);
 
+        \Log::info('storeManualReceived - Request data', [
+            'all_data' => $request->all(),
+            'has_supplier_id' => $request->has('supplier_id'),
+            'supplier_id' => $request->input('supplier_id'),
+            'has_issuer_company_id' => $request->has('issuer_company_id'),
+            'issuer_company_id' => $request->input('issuer_company_id')
+        ]);
+
         try {
             DB::beginTransaction();
 
@@ -1514,17 +1537,14 @@ class InvoiceController extends Controller
             $invoiceNumber = null;
             
             if ($validated['invoice_number'] ?? null) {
-                // Format: "0001-00005177"
                 $invoiceParts = explode('-', $validated['invoice_number']);
                 $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
                 $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
                 $invoiceNumber = $validated['invoice_number'];
             } elseif ($validated['voucher_number'] ?? null) {
-                // Just the voucher number: "5177"
                 $voucherNumber = (int)$validated['voucher_number'];
                 $invoiceNumber = sprintf('%04d-%08d', $salesPoint, $voucherNumber);
             } elseif ($validated['number'] ?? null) {
-                // Could be either format
                 if (strpos($validated['number'], '-') !== false) {
                     $invoiceParts = explode('-', $validated['number']);
                     $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
@@ -1542,20 +1562,20 @@ class InvoiceController extends Controller
                 ], 422);
             }
 
-            // Get supplier data
+            // Get supplier/issuer data
             $supplierName = null;
             $supplierDocument = null;
             $supplierId = null;
+            $issuerCompanyId = null;
             
-            if ($validated['supplier_id']) {
-                $supplier = \App\Models\Supplier::where('company_id', $companyId)
-                    ->findOrFail($validated['supplier_id']);
-                $supplierName = $supplier->business_name ?? trim($supplier->first_name . ' ' . $supplier->last_name);
-                $supplierDocument = $supplier->document_number;
-                $supplierId = $supplier->id;
+            if (!empty($validated['issuer_company_id'])) {
+                $issuerCompany = Company::findOrFail($validated['issuer_company_id']);
+                $supplierName = $issuerCompany->name;
+                $supplierDocument = $issuerCompany->national_id;
+                $issuerCompanyId = $issuerCompany->id;
             } else {
-                $supplierName = $validated['supplier_name'];
-                $supplierDocument = $validated['supplier_document'];
+                $supplierName = $validated['supplier_name'] ?? null;
+                $supplierDocument = $validated['supplier_document'] ?? null;
             }
             
             // Determine initial status based on approval configuration
@@ -1571,7 +1591,7 @@ class InvoiceController extends Controller
                 'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
-                'issuer_company_id' => $companyId, // Placeholder for constraint
+                'issuer_company_id' => $issuerCompanyId ?? $companyId, // Connected company or placeholder
                 'receiver_company_id' => $companyId, // Your company receives
                 'supplier_id' => $supplierId,
                 'issue_date' => $validated['issue_date'],
@@ -1592,7 +1612,7 @@ class InvoiceController extends Controller
                 'issuer_document' => $supplierDocument,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
-                'manual_supplier' => !$validated['supplier_id'],
+                'manual_supplier' => empty($validated['issuer_company_id']),
                 'is_manual_load' => true,
                 'created_by' => auth()->id(),
             ]);
@@ -1790,13 +1810,22 @@ class InvoiceController extends Controller
         $originalName = $file->getClientOriginalName();
         $path = $file->store('invoices/attachments', 'public');
 
+        Log::info('Uploading attachment', [
+            'invoice_id' => $id,
+            'path' => $path,
+            'original_name' => $originalName
+        ]);
+
         $invoice->update([
             'attachment_path' => $path,
             'attachment_original_name' => $originalName,
         ]);
 
+        $invoice->refresh();
+
         return response()->json([
             'message' => 'Attachment uploaded successfully',
+            'invoice' => $invoice,
             'attachment' => [
                 'path' => $path,
                 'original_name' => $originalName,
@@ -1854,10 +1883,13 @@ class InvoiceController extends Controller
             $invoice = Invoice::with([
                 'client' => function($query) { $query->withTrashed(); },
                 'supplier' => function($query) { $query->withTrashed(); },
-                'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'
+                'items', 'issuerCompany.address', 'receiverCompany.address', 'perceptions'
             ])->findOrFail($id);
 
-            // Allow PDF generation for all invoices, including manual ones
+            // Verificar que la empresa tenga acceso a esta factura
+            if ($invoice->issuer_company_id !== $companyId && $invoice->receiver_company_id !== $companyId) {
+                return response()->json(['error' => 'No autorizado'], 403);
+            }
 
             Log::info('Invoice loaded, generating PDF', [
                 'is_manual_load' => $invoice->is_manual_load ?? false,

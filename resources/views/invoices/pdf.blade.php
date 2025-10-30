@@ -49,42 +49,103 @@
     <div class="company-info">
         <h3 style="margin: 0 0 10px 0; color: #1e40af; font-size: 16px;">{{ $company->name }}</h3>
         <p style="margin: 5px 0;"><strong>CUIT:</strong> {{ $company->national_id }}</p>
-        @if($address)
-        <p style="margin: 5px 0;"><strong>Domicilio Comercial:</strong> {{ $address->street }} {{ $address->street_number }}
-           @if($address->floor), Piso {{ $address->floor }}@endif
-           @if($address->apartment) Dto {{ $address->apartment }}@endif</p>
-        <p style="margin: 5px 0;">{{ $address->city ?? '' }}{{ $address->city && $address->province ? ', ' : '' }}{{ $address->province }} - CP {{ $address->postal_code }}</p>
+        <p style="margin: 5px 0;"><strong>Domicilio Comercial:</strong> 
+        @if($address && $address->street)
+            {{ $address->street }} {{ $address->street_number ?? '' }}
+            @if($address->floor), Piso {{ $address->floor }}@endif
+            @if($address->apartment) Dto {{ $address->apartment }}@endif
+        @else
+            <span style="color: #94a3b8;">No especificado</span>
         @endif
+        </p>
+        <p style="margin: 5px 0;">
+        @if($address && ($address->city || $address->province || $address->postal_code))
+            @if($address->city){{ $address->city }}@endif
+            @if($address->city && $address->province), @endif
+            @if($address->province){{ $address->province }}@endif
+            @if($address->postal_code) - CP {{ $address->postal_code }}@endif
+            @if(!$address->city && !$address->province && !$address->postal_code)
+                <span style="color: #94a3b8;">No especificado</span>
+            @endif
+        @else
+            <span style="color: #94a3b8;">No especificado</span>
+        @endif
+        </p>
     </div>
 
     <div class="client-info">
         <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 13px;">Datos del Cliente</h4>
-        @if($client && !$client->incomplete_data)
         <p style="margin: 5px 0;"><strong>Razón Social:</strong> 
-            {{ $client->business_name ?? $client->name ?? ($client->first_name . ' ' . $client->last_name) }}
-        </p>
+        @if($client)
+            {{ $client->business_name ?? $client->name ?? ($client->first_name && $client->last_name ? $client->first_name . ' ' . $client->last_name : '') }}
+        @elseif($invoice->receiver_name)
+            {{ $invoice->receiver_name }}
+        @else
+            <span style="color: #94a3b8;">No especificado</span>
         @endif
+        </p>
         <p style="margin: 5px 0;"><strong>CUIT:</strong> 
             @if($client)
-                {{ $client->document_number ?? $client->national_id ?? 'N/A' }}
+                {{ $client->document_number ?? $client->national_id ?? 'No especificado' }}
             @elseif($invoice->receiver_document)
                 {{ $invoice->receiver_document }}
             @else
-                N/A
+                <span style="color: #94a3b8;">No especificado</span>
             @endif
         </p>
-        @if($client && !$client->incomplete_data)
         <p style="margin: 5px 0;"><strong>Condición IVA:</strong> 
-        @php
-            $taxConditions = [
-                'registered_taxpayer' => 'Responsable Inscripto',
-                'monotax' => 'Monotributista',
-                'exempt' => 'Exento',
-                'final_consumer' => 'Consumidor Final',
-            ];
-            echo $taxConditions[$client->tax_condition] ?? 'N/A';
-        @endphp
+        @if($client && $client->tax_condition)
+            @php
+                $taxConditions = [
+                    'registered_taxpayer' => 'Responsable Inscripto',
+                    'monotax' => 'Monotributista',
+                    'exempt' => 'Exento',
+                    'final_consumer' => 'Consumidor Final',
+                ];
+                echo $taxConditions[$client->tax_condition] ?? 'No especificado';
+            @endphp
+        @else
+            <span style="color: #94a3b8;">No especificado</span>
+        @endif
         </p>
+        @if($client)
+            @php
+                // Manejar address que puede ser string o objeto
+                $clientAddress = null;
+                if (isset($client->address)) {
+                    if (is_string($client->address)) {
+                        $clientAddress = $client->address;
+                    } elseif (is_object($client->address) && isset($client->address->street)) {
+                        // Si es un objeto Address, construir la dirección
+                        $clientAddress = trim(($client->address->street ?? '') . ' ' . ($client->address->street_number ?? ''));
+                    }
+                }
+                $clientCity = $client->city ?? (is_object($client->address ?? null) ? $client->address->city ?? null : null);
+                $clientProvince = $client->province ?? (is_object($client->address ?? null) ? $client->address->province ?? null : null);
+                $clientPostalCode = $client->postal_code ?? (is_object($client->address ?? null) ? $client->address->postal_code ?? null : null);
+            @endphp
+            @if($clientAddress || $clientCity || $clientProvince || $clientPostalCode)
+            <p style="margin: 5px 0;"><strong>Domicilio:</strong> 
+                @if($clientAddress)
+                    {{ $clientAddress }}
+                @else
+                    <span style="color: #94a3b8;">No especificado</span>
+                @endif
+            </p>
+            <p style="margin: 5px 0;">
+                @if($clientCity || $clientProvince || $clientPostalCode)
+                    @if($clientCity){{ $clientCity }}@endif
+                    @if($clientCity && $clientProvince), @endif
+                    @if($clientProvince){{ $clientProvince }}@endif
+                    @if($clientPostalCode) - CP {{ $clientPostalCode }}@endif
+                    @if(!$clientCity && !$clientProvince && !$clientPostalCode)
+                        <span style="color: #94a3b8;">No especificado</span>
+                    @endif
+                @else
+                    <span style="color: #94a3b8;">No especificado</span>
+                @endif
+            </p>
+            @endif
         @endif
     </div>
 
