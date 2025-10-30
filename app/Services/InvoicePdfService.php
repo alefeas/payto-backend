@@ -15,6 +15,7 @@ class InvoicePdfService
                 'issuerCompany.address', 
                 'issuerCompany.bankAccounts', 
                 'client' => function($query) { $query->withTrashed(); },
+                'supplier' => function($query) { $query->withTrashed(); },
                 'receiverCompany', 
                 'items', 
                 'perceptions'
@@ -33,11 +34,41 @@ class InvoicePdfService
                 }
             }
             
+            // For manual received invoices, the client/receiver could be in different fields
+            $clientOrReceiver = null;
+            if ($invoice->client) {
+                $clientOrReceiver = $invoice->client;
+            } elseif ($invoice->receiverCompany) {
+                $clientOrReceiver = $invoice->receiverCompany;
+            } elseif ($invoice->supplier) {
+                // For manual received invoices, supplier is the issuer
+                $clientOrReceiver = $invoice->supplier;
+            }
+            
+            // For manual received invoices, we need to handle the company/client differently
+            $company = $invoice->issuerCompany;
+            $client = $clientOrReceiver;
+            
+            // If this is a manual received invoice, the "issuer" in the PDF should be the supplier
+            if ($invoice->is_manual_load && $invoice->supplier) {
+                // Create a mock company object from supplier data for PDF display
+                $supplierAsCompany = (object) [
+                    'name' => $invoice->supplier->business_name ?? trim($invoice->supplier->first_name . ' ' . $invoice->supplier->last_name),
+                    'national_id' => $invoice->supplier->document_number,
+                    'address' => null, // Suppliers don't have address in our model
+                    'bankAccounts' => collect([]), // Empty collection
+                ];
+                $company = $supplierAsCompany;
+                
+                // The client is the receiving company (current company)
+                $client = $invoice->issuerCompany; // This is actually the receiver for manual invoices
+            }
+            
             $data = [
                 'invoice' => $invoice,
-                'company' => $invoice->issuerCompany,
-                'address' => $invoice->issuerCompany->address ?? null,
-                'client' => $invoice->client ?? $invoice->receiverCompany,
+                'company' => $company,
+                'address' => $company->address ?? null,
+                'client' => $client,
                 'barcodeBase64' => $barcodeBase64,
                 'qrBase64' => $qrBase64,
             ];
@@ -118,7 +149,7 @@ class InvoicePdfService
     
     private function getAfipDocType(Invoice $invoice): int
     {
-        $client = $invoice->client ?? $invoice->receiverCompany;
+        $client = $invoice->client ?? $invoice->receiverCompany ?? $invoice->supplier;
         $docType = $client->document_type ?? 'CUIT';
         
         return match($docType) {
@@ -132,7 +163,7 @@ class InvoicePdfService
     
     private function getClientDocument(Invoice $invoice): string
     {
-        $client = $invoice->client ?? $invoice->receiverCompany;
+        $client = $invoice->client ?? $invoice->receiverCompany ?? $invoice->supplier;
         return $client->document_number ?? $client->national_id ?? '0';
     }
     
@@ -141,6 +172,7 @@ class InvoicePdfService
         $invoice->load([
             'issuerCompany', 
             'client' => function($query) { $query->withTrashed(); },
+            'supplier' => function($query) { $query->withTrashed(); },
             'receiverCompany', 
             'items'
         ]);
@@ -150,7 +182,7 @@ class InvoicePdfService
         $lines[] = $invoice->type;
         $lines[] = $invoice->issue_date->format('Ymd');
         
-        $client = $invoice->client ?? $invoice->receiverCompany;
+        $client = $invoice->client ?? $invoice->receiverCompany ?? $invoice->supplier;
         $lines[] = ($client->document_type ?? 'CUIT') . '|' . ($client->document_number ?? $client->national_id ?? '');
         
         $lines[] = number_format($invoice->subtotal, 2, '.', '');

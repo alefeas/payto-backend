@@ -8,6 +8,8 @@ Route::get('/', [InvoiceController::class, 'index']);
 Route::get('/next-number', [InvoiceController::class, 'getNextNumber']);
 Route::delete('/delete-all', [InvoiceController::class, 'deleteAll']);
 Route::post('/', [InvoiceController::class, 'store']);
+Route::post('/manual-issued', [InvoiceController::class, 'storeManualIssued']);
+Route::post('/manual-received', [InvoiceController::class, 'storeManualReceived']);
 Route::post('/received', [InvoiceController::class, 'storeReceived']);
 Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);
 Route::post('/sync-from-afip', [InvoiceController::class, 'syncFromAfip']);

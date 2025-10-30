@@ -67,6 +67,7 @@ class Invoice extends Model
         'attachment_original_name',
         'needs_review',
         'synced_from_afip',
+        'is_manual_load',
         'created_by',
     ];
 
@@ -94,6 +95,7 @@ class Invoice extends Model
         'dispute_opened' => 'boolean',
         'needs_review' => 'boolean',
         'synced_from_afip' => 'boolean',
+        'is_manual_load' => 'boolean',
         'transport_data' => 'array',
         'company_statuses' => 'array',
     ];

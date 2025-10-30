@@ -223,6 +223,7 @@ class InvoiceController extends Controller
             [
                 'items.*.quantity.max' => 'La cantidad no puede superar las 999,999 unidades. Si necesitás facturar más, dividí en múltiples ítems.',
                 'items.*.unit_price.max' => 'El precio unitario no puede superar $999,999,999. Si necesitás facturar montos mayores, dividí en múltiples ítems.',
+                'due_date.date' => 'La fecha de vencimiento debe ser una fecha válida.',
             ]
         );
 
@@ -244,7 +245,7 @@ class InvoiceController extends Controller
             'service_date_from' => 'nullable|date',
             'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
             'issue_date' => 'required|date',
-            'due_date' => 'nullable|date|after_or_equal:issue_date',
+            'due_date' => 'nullable|date|after_or_equal:issue_date|before:2030-01-01',
             'currency' => 'nullable|string|size:3',
             'exchange_rate' => 'nullable|numeric|min:0',
             'notes' => 'nullable|string',
@@ -321,7 +322,8 @@ class InvoiceController extends Controller
                 $itemBase = $item['quantity'] * $item['unit_price'];
                 $itemDiscount = $itemBase * ($discount / 100);
                 $itemSubtotal = $itemBase - $itemDiscount;
-                $itemTax = $itemSubtotal * ($taxRate / 100);
+                // Exento (-1) y No Gravado (-2) tienen IVA = 0
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
                 
                 $subtotal += $itemSubtotal;
                 $totalTaxes += $itemTax;
@@ -417,7 +419,8 @@ class InvoiceController extends Controller
                 $itemBase = $item['quantity'] * $item['unit_price'];
                 $itemDiscount = $itemBase * ($discount / 100);
                 $itemSubtotal = $itemBase - $itemDiscount;
-                $itemTax = $itemSubtotal * ($taxRate / 100);
+                // Exento (-1) y No Gravado (-2) tienen IVA = 0
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
 
                 $invoice->items()->create([
                     'description' => $item['description'],
@@ -542,7 +545,8 @@ class InvoiceController extends Controller
             })
             ->with([
                 'client' => function($query) { $query->withTrashed(); },
-                'items', 'receiverCompany', 'issuerCompany'
+                'supplier' => function($query) { $query->withTrashed(); },
+                'items', 'receiverCompany', 'issuerCompany', 'perceptions'
             ])
             ->findOrFail($id);
 
@@ -680,7 +684,7 @@ class InvoiceController extends Controller
 
         $validated = $request->validate([
             'issuer_cuit' => 'required|string',
-            'invoice_type' => 'required|in:A,B,C,E',
+            'invoice_type' => 'required|in:A,B,C,M,NCA,NCB,NCC,NCM,NDA,NDB,NDC,NDM',
             'invoice_number' => 'required|string|regex:/^\d{4}-\d{8}$/',
         ]);
 
@@ -1009,20 +1013,20 @@ class InvoiceController extends Controller
                             if ($consecutiveOld >= $maxConsecutiveOld) break;
                             try {
                                 Log::info('🔍 CALLING AFIP consultInvoice', [
-                'issuer_cuit' => $company->national_id,
-                'invoice_type_code' => $invoiceTypeCode,
-                'sales_point' => $salesPoint,
-                'voucher_number' => $num,
-            ]);
-            
-            $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
-            
-            Log::info('📥 AFIP RESPONSE RECEIVED', [
-                'found' => $afipData['found'] ?? false,
-                'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
-                'cae' => $afipData['cae'] ?? 'NULL',
-                'issue_date' => $afipData['issue_date'] ?? 'NULL',
-            ]);
+                                    'issuer_cuit' => $company->national_id,
+                                    'invoice_type_code' => $invoiceTypeCode,
+                                    'sales_point' => $salesPoint,
+                                    'voucher_number' => $num,
+                                ]);
+                                
+                                $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
+                                
+                                Log::info('📥 AFIP RESPONSE RECEIVED', [
+                                    'found' => $afipData['found'] ?? false,
+                                    'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
+                                    'cae' => $afipData['cae'] ?? 'NULL',
+                                    'issue_date' => $afipData['issue_date'] ?? 'NULL',
+                                ]);
                                 
                                 if (!$afipData['found']) continue;
 
@@ -1202,13 +1206,468 @@ class InvoiceController extends Controller
         return $types[$type] ?? 6;
     }
 
+    public function storeManualIssued(Request $request, $companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('create', [Invoice::class, $company]);
+        
+        $validated = $request->validate([
+            'client_id' => 'nullable|exists:clients,id',
+            'receiver_company_id' => 'nullable|exists:companies,id',
+            'client_name' => 'required_without_all:client_id,receiver_company_id|string|max:200',
+            'client_document' => 'required_without_all:client_id,receiver_company_id|string|max:20',
+            'invoice_type' => 'required|string',
+            'invoice_number' => 'nullable|string|max:50',
+            'number' => 'nullable|string|max:50',
+            'voucher_number' => 'nullable|max:50',
+            'sales_point' => 'nullable|integer|min:1|max:9999',
+            'issue_date' => 'required|date',
+            'due_date' => 'required|date|after_or_equal:issue_date|before:2031-01-01',
+            'currency' => 'required|string|size:3',
+            'exchange_rate' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string|max:500',
+            'items' => 'required|array|min:1',
+            'items.*.description' => 'required|string|max:200',
+            'items.*.quantity' => 'required|numeric|min:0.01',
+            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'nullable|numeric|min:-2|max:100',
+            'cae' => 'nullable|string|size:14|regex:/^[0-9]{14}$/',
+            'cae_due_date' => 'nullable|date|required_with:cae',
+            'service_date_from' => 'nullable|date|required_if:concept,services,products_services',
+            'service_date_to' => 'nullable|date|after_or_equal:service_date_from|required_if:concept,services,products_services',
+        ], [
+            'client_name.required_without_all' => 'El nombre del cliente es obligatorio cuando no se selecciona un cliente o empresa existente.',
+            'client_document.required_without_all' => 'El documento del cliente es obligatorio cuando no se selecciona un cliente o empresa existente.',
+            'invoice_type.required' => 'El tipo de factura es obligatorio.',
+            'issue_date.required' => 'La fecha de emisión es obligatoria.',
+            'issue_date.date' => 'La fecha de emisión debe tener un formato válido (AAAA-MM-DD). Verifique que el día, mes y año sean correctos.',
+            'due_date.required' => 'La fecha de vencimiento es obligatoria.',
+            'due_date.date' => 'La fecha de vencimiento debe tener un formato válido (AAAA-MM-DD). Verifique que el día, mes y año sean correctos.',
+            'due_date.after_or_equal' => 'La fecha de vencimiento debe ser igual o posterior a la fecha de emisión.',
+            'due_date.before' => 'La fecha de vencimiento no puede ser posterior al año 2030. Seleccione una fecha hasta el 31/12/2030.',
+            'cae.size' => 'El CAE debe tener exactamente 14 dígitos.',
+            'cae.regex' => 'El CAE debe contener solo números (14 dígitos).',
+            'cae_due_date.date' => 'La fecha de vencimiento del CAE debe tener un formato válido (AAAA-MM-DD).',
+            'cae_due_date.required_with' => 'La fecha de vencimiento del CAE es obligatoria cuando se ingresa el número de CAE.',
+            'service_date_from.required_if' => 'La fecha de inicio del servicio es obligatoria para servicios.',
+            'service_date_to.required_if' => 'La fecha de fin del servicio es obligatoria para servicios.',
+            'service_date_to.after_or_equal' => 'La fecha de fin del servicio debe ser igual o posterior a la fecha de inicio.',
+            'currency.required' => 'La moneda es obligatoria.',
+            'items.required' => 'Debe agregar al menos un ítem.',
+            'items.*.description.required' => 'La descripción del ítem es obligatoria.',
+            'items.*.quantity.required' => 'La cantidad es obligatoria.',
+            'items.*.unit_price.required' => 'El precio unitario es obligatorio.',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Calculate totals
+            $subtotal = 0;
+            $totalTaxes = 0;
+            foreach ($validated['items'] as $item) {
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
+                $taxRate = $item['tax_rate'] ?? 0;
+                // Exento (-1) y No Gravado (-2) tienen IVA = 0
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
+                $subtotal += $itemSubtotal;
+                $totalTaxes += $itemTax;
+            }
+            
+            $total = $subtotal + $totalTaxes;
+
+            // Validate total amount limit
+            if ($total > 999999999.99) {
+                return response()->json([
+                    'message' => 'El monto total del comprobante no puede superar los $999.999.999,99. Verifique los importes ingresados.',
+                    'errors' => ['total' => ['El monto total es demasiado alto']]
+                ], 422);
+            }
+
+            // Handle different invoice number formats
+            $salesPoint = $validated['sales_point'] ?? 1;
+            $voucherNumber = null;
+            $invoiceNumber = null;
+            
+            if ($validated['invoice_number'] ?? null) {
+                $invoiceParts = explode('-', $validated['invoice_number']);
+                $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
+                $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
+                $invoiceNumber = $validated['invoice_number'];
+            } elseif ($validated['voucher_number'] ?? null) {
+                $voucherNumber = (int)$validated['voucher_number'];
+                $invoiceNumber = sprintf('%04d-%08d', $salesPoint, $voucherNumber);
+            } elseif ($validated['number'] ?? null) {
+                if (strpos($validated['number'], '-') !== false) {
+                    $invoiceParts = explode('-', $validated['number']);
+                    $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
+                    $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
+                } else {
+                    $voucherNumber = (int)$validated['number'];
+                }
+                $invoiceNumber = sprintf('%04d-%08d', $salesPoint, $voucherNumber);
+            }
+            
+            if (!$voucherNumber) {
+                return response()->json([
+                    'message' => 'Número de factura requerido',
+                    'debug' => 'Campos recibidos: ' . implode(', ', array_keys($request->all()))
+                ], 422);
+            }
+            
+            // Convert invoice type code to internal type
+            $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+            
+            // Check for duplicate invoice
+            $existingInvoice = Invoice::where('issuer_company_id', $companyId)
+                ->where('type', $invoiceTypeInternal)
+                ->where('sales_point', $salesPoint)
+                ->where('voucher_number', $voucherNumber)
+                ->first();
+                
+            if ($existingInvoice) {
+                return response()->json([
+                    'message' => 'Ya existe una factura con el mismo tipo, punto de venta y número. Verifique los datos ingresados.',
+                    'errors' => ['voucher_number' => ['Factura duplicada']]
+                ], 422);
+            }
+            
+            // Create manual issued invoice
+            $invoice = Invoice::create([
+                'number' => $invoiceNumber,
+                'type' => $invoiceTypeInternal,
+                'sales_point' => $salesPoint,
+                'voucher_number' => $voucherNumber,
+                'concept' => 'products',
+                'issuer_company_id' => $companyId,
+                'receiver_company_id' => $validated['receiver_company_id'] ?? null,
+                'client_id' => $validated['client_id'] ?? null,
+                'issue_date' => $validated['issue_date'],
+                'due_date' => $validated['due_date'],
+                'subtotal' => $subtotal,
+                'total_taxes' => $totalTaxes,
+                'total_perceptions' => 0,
+                'total' => $total,
+                'currency' => $validated['currency'],
+                'exchange_rate' => $validated['exchange_rate'] ?? 1,
+                'notes' => $validated['notes'] ?? null,
+                'status' => 'issued',
+                'afip_status' => 'approved',
+                'receiver_name' => $validated['client_name'] ?? null,
+                'receiver_document' => $validated['client_document'] ?? null,
+                'afip_cae' => $validated['cae'] ?? null,
+                'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
+                'is_manual_load' => true,
+                'created_by' => auth()->id(),
+            ]);
+
+            // Create items
+            foreach ($validated['items'] as $index => $item) {
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
+                $itemTax = $itemSubtotal * (($item['tax_rate'] ?? 0) / 100);
+
+                $invoice->items()->create([
+                    'description' => $item['description'],
+                    'quantity' => $item['quantity'],
+                    'unit_price' => $item['unit_price'],
+                    'discount_percentage' => $item['discount_percentage'] ?? 0,
+                    'tax_rate' => $item['tax_rate'] ?? 0,
+                    'tax_amount' => $itemTax,
+                    'subtotal' => $itemSubtotal,
+                    'order_index' => $index,
+                ]);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Factura emitida creada exitosamente',
+                'invoice' => $invoice->load(['items']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Manual issued invoice creation failed', [
+                'company_id' => $companyId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Error al crear la factura emitida',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function storeManualReceived(Request $request, $companyId)
+    {
+        $company = Company::findOrFail($companyId);
+        $this->authorize('create', [Invoice::class, $company]);
+        
+        Log::info('storeManualReceived request data', $request->all());
+
+        $validated = $request->validate([
+            'supplier_id' => 'nullable|exists:suppliers,id',
+            'supplier_name' => 'required_without:supplier_id|string|max:200',
+            'supplier_document' => 'required_without:supplier_id|string|max:20',
+            'invoice_type' => 'required|string',
+            'invoice_number' => 'nullable|string|max:50',
+            'number' => 'nullable|string|max:50',
+            'voucher_number' => 'nullable|max:50',
+            'sales_point' => 'nullable|integer|min:1|max:9999',
+            'issue_date' => 'required|date',
+            'due_date' => 'required|date|after_or_equal:issue_date|before:2030-01-01',
+            'currency' => 'required|string|size:3',
+            'exchange_rate' => 'nullable|numeric|min:0',
+            'notes' => 'nullable|string|max:500',
+            'items' => 'required|array|min:1',
+            'items.*.description' => 'required|string|max:200',
+            'items.*.quantity' => 'required|numeric|min:0.01',
+            'items.*.unit_price' => 'required|numeric|min:0',
+            'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'nullable|numeric|min:-2|max:100',
+            'cae' => 'nullable|string|max:20',
+            'cae_due_date' => 'nullable|date',
+            'perceptions' => 'nullable|array',
+            'perceptions.*.type' => 'required|string|max:100',
+            'perceptions.*.name' => 'required|string|max:100',
+            'perceptions.*.rate' => 'nullable|numeric|min:0|max:100',
+            'perceptions.*.amount' => 'nullable|numeric|min:0',
+            'perceptions.*.jurisdiction' => 'nullable|string|max:100',
+            'perceptions.*.base_type' => 'nullable|in:net,total,vat',
+        ], [
+            'supplier_id.exists' => 'El proveedor seleccionado no existe.',
+            'supplier_name.required_without' => 'El nombre del proveedor es obligatorio cuando no se selecciona un proveedor existente.',
+            'supplier_name.max' => 'El nombre del proveedor no puede superar los 200 caracteres.',
+            'supplier_document.required_without' => 'El documento del proveedor es obligatorio cuando no se selecciona un proveedor existente.',
+            'supplier_document.max' => 'El documento del proveedor no puede superar los 20 caracteres.',
+            'invoice_type.required' => 'El tipo de factura es obligatorio.',
+            'invoice_type.in' => 'El tipo de factura seleccionado no es válido.',
+            'invoice_number.required' => 'El número de factura es obligatorio.',
+            'invoice_number.max' => 'El número de factura no puede superar los 50 caracteres.',
+            'issue_date.required' => 'La fecha de emisión es obligatoria.',
+            'issue_date.date' => 'La fecha de emisión debe ser una fecha válida.',
+            'due_date.required' => 'La fecha de vencimiento es obligatoria.',
+            'due_date.date' => 'La fecha de vencimiento debe ser una fecha válida.',
+            'due_date.after_or_equal' => 'La fecha de vencimiento debe ser igual o posterior a la fecha de emisión.',
+            'due_date.before' => 'La fecha de vencimiento no puede ser posterior al año 2030.',
+            'currency.required' => 'La moneda es obligatoria.',
+            'currency.size' => 'La moneda debe tener exactamente 3 caracteres.',
+            'exchange_rate.numeric' => 'El tipo de cambio debe ser un número.',
+            'exchange_rate.min' => 'El tipo de cambio debe ser mayor o igual a 0.',
+            'notes.max' => 'Las notas no pueden superar los 500 caracteres.',
+            'items.required' => 'Debe agregar al menos un ítem.',
+            'items.min' => 'Debe agregar al menos un ítem.',
+            'items.*.description.required' => 'La descripción del ítem es obligatoria.',
+            'items.*.description.max' => 'La descripción del ítem no puede superar los 200 caracteres.',
+            'items.*.quantity.required' => 'La cantidad es obligatoria.',
+            'items.*.quantity.numeric' => 'La cantidad debe ser un número.',
+            'items.*.quantity.min' => 'La cantidad debe ser mayor a 0.',
+            'items.*.unit_price.required' => 'El precio unitario es obligatorio.',
+            'items.*.unit_price.numeric' => 'El precio unitario debe ser un número.',
+            'items.*.unit_price.min' => 'El precio unitario debe ser mayor o igual a 0.',
+            'items.*.tax_rate.numeric' => 'La tasa de impuesto debe ser un número.',
+            'items.*.tax_rate.min' => 'La tasa de impuesto debe ser mayor o igual a 0.',
+            'items.*.tax_rate.max' => 'La tasa de impuesto no puede superar el 100%.',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Calculate totals
+            $subtotal = 0;
+            $totalTaxes = 0;
+            foreach ($validated['items'] as $item) {
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
+                $itemTax = $itemSubtotal * (($item['tax_rate'] ?? 0) / 100);
+                $subtotal += $itemSubtotal;
+                $totalTaxes += $itemTax;
+            }
+            
+            // Calculate perceptions
+            $totalPerceptions = 0;
+            if (!empty($validated['perceptions'])) {
+                foreach ($validated['perceptions'] as $perception) {
+                    $baseAmount = $this->calculatePerceptionBase(
+                        $perception['type'],
+                        $perception['base_type'] ?? null,
+                        $subtotal,
+                        $totalTaxes
+                    );
+                    $totalPerceptions += $baseAmount * (($perception['rate'] ?? 0) / 100);
+                }
+            }
+            
+            $total = $subtotal + $totalTaxes + $totalPerceptions;
+
+            // Handle different invoice number formats
+            $salesPoint = $validated['sales_point'] ?? 1;
+            $voucherNumber = null;
+            $invoiceNumber = null;
+            
+            if ($validated['invoice_number'] ?? null) {
+                // Format: "0001-00005177"
+                $invoiceParts = explode('-', $validated['invoice_number']);
+                $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
+                $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
+                $invoiceNumber = $validated['invoice_number'];
+            } elseif ($validated['voucher_number'] ?? null) {
+                // Just the voucher number: "5177"
+                $voucherNumber = (int)$validated['voucher_number'];
+                $invoiceNumber = sprintf('%04d-%08d', $salesPoint, $voucherNumber);
+            } elseif ($validated['number'] ?? null) {
+                // Could be either format
+                if (strpos($validated['number'], '-') !== false) {
+                    $invoiceParts = explode('-', $validated['number']);
+                    $salesPoint = isset($invoiceParts[0]) ? (int)$invoiceParts[0] : $salesPoint;
+                    $voucherNumber = isset($invoiceParts[1]) ? (int)$invoiceParts[1] : 0;
+                } else {
+                    $voucherNumber = (int)$validated['number'];
+                }
+                $invoiceNumber = sprintf('%04d-%08d', $salesPoint, $voucherNumber);
+            }
+            
+            if (!$voucherNumber) {
+                return response()->json([
+                    'message' => 'Número de factura requerido',
+                    'debug' => 'Campos recibidos: ' . implode(', ', array_keys($request->all()))
+                ], 422);
+            }
+
+            // Get supplier data
+            $supplierName = null;
+            $supplierDocument = null;
+            $supplierId = null;
+            
+            if ($validated['supplier_id']) {
+                $supplier = \App\Models\Supplier::where('company_id', $companyId)
+                    ->findOrFail($validated['supplier_id']);
+                $supplierName = $supplier->business_name ?? trim($supplier->first_name . ' ' . $supplier->last_name);
+                $supplierDocument = $supplier->document_number;
+                $supplierId = $supplier->id;
+            } else {
+                $supplierName = $validated['supplier_name'];
+                $supplierDocument = $validated['supplier_document'];
+            }
+            
+            // Determine initial status based on approval configuration
+            $requiredApprovals = (int)($company->required_approvals ?? 0);
+            
+            // Convert invoice type code to internal type
+            $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+            
+            // Create manual received invoice
+            $invoice = Invoice::create([
+                'number' => $invoiceNumber,
+                'type' => $invoiceTypeInternal,
+                'sales_point' => $salesPoint,
+                'voucher_number' => $voucherNumber,
+                'concept' => 'products',
+                'issuer_company_id' => $companyId, // Placeholder for constraint
+                'receiver_company_id' => $companyId, // Your company receives
+                'supplier_id' => $supplierId,
+                'issue_date' => $validated['issue_date'],
+                'due_date' => $validated['due_date'],
+                'subtotal' => $subtotal,
+                'total_taxes' => $totalTaxes,
+                'total_perceptions' => $totalPerceptions,
+                'total' => $total,
+                'currency' => $validated['currency'],
+                'exchange_rate' => $validated['exchange_rate'] ?? 1,
+                'notes' => $validated['notes'] ?? null,
+                'status' => $requiredApprovals === 0 ? 'approved' : 'pending_approval',
+                'afip_status' => 'approved',
+                'approvals_required' => $requiredApprovals,
+                'approvals_received' => 0,
+                'approval_date' => $requiredApprovals === 0 ? now() : null,
+                'issuer_name' => $supplierName,
+                'issuer_document' => $supplierDocument,
+                'afip_cae' => $validated['cae'] ?? null,
+                'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
+                'manual_supplier' => !$validated['supplier_id'],
+                'is_manual_load' => true,
+                'created_by' => auth()->id(),
+            ]);
+
+            // Create items
+            foreach ($validated['items'] as $index => $item) {
+                $itemBase = $item['quantity'] * $item['unit_price'];
+                $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
+                $itemSubtotal = $itemBase - $itemDiscount;
+                $itemTax = $itemSubtotal * (($item['tax_rate'] ?? 0) / 100);
+
+                $invoice->items()->create([
+                    'description' => $item['description'],
+                    'quantity' => $item['quantity'],
+                    'unit_price' => $item['unit_price'],
+                    'discount_percentage' => $item['discount_percentage'] ?? 0,
+                    'tax_rate' => $item['tax_rate'] ?? 0,
+                    'tax_amount' => $itemTax,
+                    'subtotal' => $itemSubtotal,
+                    'order_index' => $index,
+                ]);
+            }
+
+            // Create perceptions
+            if (!empty($validated['perceptions'])) {
+                foreach ($validated['perceptions'] as $perception) {
+                    $baseAmount = $this->calculatePerceptionBase(
+                        $perception['type'],
+                        $perception['base_type'] ?? null,
+                        $subtotal,
+                        $totalTaxes
+                    );
+                    $amount = $baseAmount * (($perception['rate'] ?? 0) / 100);
+
+                    $invoice->perceptions()->create([
+                        'type' => $perception['type'],
+                        'name' => $perception['name'],
+                        'rate' => $perception['rate'] ?? 0,
+                        'base_type' => $perception['base_type'] ?? $this->getDefaultBaseType($perception['type']),
+                        'jurisdiction' => $perception['jurisdiction'] ?? null,
+                        'base_amount' => $baseAmount,
+                        'amount' => $amount,
+                    ]);
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Factura recibida creada exitosamente',
+                'invoice' => $invoice->load(['items', 'perceptions']),
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            Log::error('Manual received invoice creation failed', [
+                'company_id' => $companyId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Error al crear la factura recibida',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function storeReceived(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
 
         $validated = $request->validate([
             'supplier_id' => 'required|exists:suppliers,id',
-            'invoice_type' => 'required|in:A,B,C,E',
+            'invoice_type' => 'required|in:A,B,C,M,NCA,NCB,NCC,NCM,NDA,NDB,NDC,NDM',
             'invoice_number' => 'required|string',
             'issue_date' => 'required|date',
             'due_date' => 'required|date',
@@ -1219,7 +1678,7 @@ class InvoiceController extends Controller
             'items.*.description' => 'required|string|max:200',
             'items.*.quantity' => 'required|numeric|min:0.01',
             'items.*.unit_price' => 'required|numeric|min:0',
-            'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'nullable|numeric|min:-2|max:100',
         ]);
 
         try {
@@ -1394,10 +1853,18 @@ class InvoiceController extends Controller
             
             $invoice = Invoice::with([
                 'client' => function($query) { $query->withTrashed(); },
+                'supplier' => function($query) { $query->withTrashed(); },
                 'items', 'issuerCompany.address', 'receiverCompany', 'perceptions'
             ])->findOrFail($id);
 
-            Log::info('Invoice loaded, generating PDF');
+            // Allow PDF generation for all invoices, including manual ones
+
+            Log::info('Invoice loaded, generating PDF', [
+                'is_manual_load' => $invoice->is_manual_load ?? false,
+                'has_supplier' => $invoice->supplier_id ? true : false,
+                'has_client' => $invoice->client_id ? true : false,
+                'has_perceptions' => $invoice->perceptions ? $invoice->perceptions->count() : 0
+            ]);
             
             // Generar PDF on-demand siempre (por ahora para debug)
             $pdfService = new \App\Services\InvoicePdfService();
