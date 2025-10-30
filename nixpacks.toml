@@ -1,5 +1,0 @@
-[phases.setup]
-aptPkgs = ['libxml2-dev']
-
-[phases.install]
-cmds = ['docker-php-ext-install soap']
