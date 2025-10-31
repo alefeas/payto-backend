@@ -27,6 +27,34 @@ return new class extends Migration
             $table->index(['company_id', 'status']);
         });
 
+        // Suppliers
+        Schema::create('suppliers', function (Blueprint $table) {
+            $table->id();
+            $table->uuid('company_id');
+            $table->enum('document_type', ['CUIT', 'CUIL', 'DNI', 'Pasaporte', 'CDI']);
+            $table->string('document_number', 20);
+            $table->string('business_name', 100)->nullable();
+            $table->string('first_name', 50)->nullable();
+            $table->string('last_name', 50)->nullable();
+            $table->string('email', 100)->nullable();
+            $table->string('phone', 20)->nullable();
+            $table->string('address', 200)->nullable();
+            $table->string('postal_code', 20)->nullable();
+            $table->string('city', 100)->nullable();
+            $table->string('province', 100)->nullable();
+            $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt', 'final_consumer']);
+            $table->string('bank_name', 100)->nullable();
+            $table->enum('bank_account_type', ['CA', 'CC'])->nullable();
+            $table->string('bank_account_number', 50)->nullable();
+            $table->string('bank_cbu', 22)->nullable();
+            $table->string('bank_alias', 50)->nullable();
+            $table->softDeletes();
+            $table->timestamps();
+            
+            $table->unique(['company_id', 'document_number']);
+            $table->foreign('company_id')->references('id')->on('companies')->onDelete('cascade');
+        });
+
         // Clients
         Schema::create('clients', function (Blueprint $table) {
             $table->uuid('id')->primary();
@@ -319,6 +347,7 @@ return new class extends Migration
         Schema::dropIfExists('invoice_items');
         Schema::dropIfExists('invoices');
         Schema::dropIfExists('clients');
+        Schema::dropIfExists('suppliers');
         Schema::dropIfExists('company_connections');
     }
 };
