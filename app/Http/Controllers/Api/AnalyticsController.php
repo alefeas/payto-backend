@@ -171,6 +171,9 @@ class AnalyticsController extends Controller
             ->limit(5)
             ->with('client:id,first_name,last_name,business_name')
             ->get()
+            ->filter(function ($item) {
+                return $item->client !== null;
+            })
             ->map(function ($item) {
                 return [
                     'client_id' => $item->client_id,
@@ -178,7 +181,8 @@ class AnalyticsController extends Controller
                     'total_amount' => $item->total_amount,
                     'invoice_count' => $item->invoice_count
                 ];
-            });
+            })
+            ->values();
 
         return response()->json($topClients);
     }
