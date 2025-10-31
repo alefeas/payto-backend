@@ -298,8 +298,21 @@ class CompanyConnectionController extends Controller
                 ? $connection->connected_company_id 
                 : $connection->company_id;
             
+            \Log::info('Deleting connection', [
+                'connection_id' => $connectionId,
+                'company_id' => $companyId,
+                'other_company_id' => $otherCompanyId,
+            ]);
+            
             $otherCompany = Company::findOrFail($otherCompanyId);
             
+            // Normalizar CUIT para búsqueda
+            $normalizedCuitOther = str_replace('-', '', $otherCompany->national_id);
+            $normalizedCuitMy = str_replace('-', '', $company->national_id);
+            
+            $created = [];
+            
+            // === PARA MI EMPRESA ===
             // Verificar facturas emitidas (yo -> otra empresa)
             $invoicesSent = Invoice::where('issuer_company_id', $companyId)
                 ->where('receiver_company_id', $otherCompanyId)
@@ -310,46 +323,125 @@ class CompanyConnectionController extends Controller
                 ->where('receiver_company_id', $companyId)
                 ->exists();
             
-            $created = [];
-            
-            // Si emití facturas, crear Cliente
+            // Si emití facturas, crear/usar Cliente
             if ($invoicesSent) {
-                $client = $company->clients()->create([
-                    'document_type' => 'CUIT',
-                    'document_number' => $otherCompany->national_id,
-                    'business_name' => $otherCompany->name,
-                    'tax_condition' => $otherCompany->tax_condition,
-                    'email' => null,
-                    'phone' => null,
-                    'address' => null,
-                ]);
+                $client = \App\Models\Client::withTrashed()
+                    ->where('company_id', $companyId)
+                    ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuitOther])
+                    ->first();
+                
+                if (!$client) {
+                    $client = $company->clients()->create([
+                        'document_type' => 'CUIT',
+                        'document_number' => $otherCompany->national_id,
+                        'business_name' => $otherCompany->name,
+                        'tax_condition' => $otherCompany->tax_condition,
+                        'email' => null,
+                        'phone' => null,
+                        'address' => null,
+                    ]);
+                    $created[] = 'cliente';
+                } else if ($client->trashed()) {
+                    $client->restore();
+                }
                 
                 // Re-vincular facturas emitidas
                 Invoice::where('issuer_company_id', $companyId)
                     ->where('receiver_company_id', $otherCompanyId)
                     ->update(['client_id' => $client->id, 'receiver_company_id' => null]);
-                
-                $created[] = 'cliente';
             }
             
-            // Si recibí facturas, crear Proveedor
+            // Si recibí facturas, crear/usar Proveedor
             if ($invoicesReceived) {
-                $supplier = $company->suppliers()->create([
-                    'document_type' => 'CUIT',
-                    'document_number' => $otherCompany->national_id,
-                    'business_name' => $otherCompany->name,
-                    'tax_condition' => $otherCompany->tax_condition,
-                    'email' => null,
-                    'phone' => null,
-                    'address' => null,
-                ]);
+                $supplier = \App\Models\Supplier::withTrashed()
+                    ->where('company_id', $companyId)
+                    ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuitOther])
+                    ->first();
+                
+                if (!$supplier) {
+                    $supplier = $company->suppliers()->create([
+                        'document_type' => 'CUIT',
+                        'document_number' => $otherCompany->national_id,
+                        'business_name' => $otherCompany->name,
+                        'tax_condition' => $otherCompany->tax_condition,
+                        'email' => null,
+                        'phone' => null,
+                        'address' => null,
+                    ]);
+                    $created[] = 'proveedor';
+                } else if ($supplier->trashed()) {
+                    $supplier->restore();
+                }
                 
                 // Re-vincular facturas recibidas
                 Invoice::where('issuer_company_id', $otherCompanyId)
                     ->where('receiver_company_id', $companyId)
-                    ->update(['supplier_id' => $supplier->id, 'issuer_company_id' => null]);
+                    ->update(['supplier_id' => $supplier->id, 'issuer_company_id' => $companyId]);
+            }
+            
+            // === PARA LA OTRA EMPRESA (bidireccional) ===
+            // Verificar facturas que la otra empresa emitió hacia mí
+            $otherInvoicesSent = Invoice::where('issuer_company_id', $otherCompanyId)
+                ->where('receiver_company_id', $companyId)
+                ->exists();
+            
+            // Verificar facturas que la otra empresa recibió de mí
+            $otherInvoicesReceived = Invoice::where('issuer_company_id', $companyId)
+                ->where('receiver_company_id', $otherCompanyId)
+                ->exists();
+            
+            // Si la otra empresa me emitió facturas, crearle un Cliente con mis datos
+            if ($otherInvoicesSent) {
+                $otherClient = \App\Models\Client::withTrashed()
+                    ->where('company_id', $otherCompanyId)
+                    ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuitMy])
+                    ->first();
                 
-                $created[] = 'proveedor';
+                if (!$otherClient) {
+                    $otherClient = $otherCompany->clients()->create([
+                        'document_type' => 'CUIT',
+                        'document_number' => $company->national_id,
+                        'business_name' => $company->name,
+                        'tax_condition' => $company->tax_condition,
+                        'email' => null,
+                        'phone' => null,
+                        'address' => null,
+                    ]);
+                } else if ($otherClient->trashed()) {
+                    $otherClient->restore();
+                }
+                
+                // Re-vincular facturas de la otra empresa hacia mí
+                Invoice::where('issuer_company_id', $otherCompanyId)
+                    ->where('receiver_company_id', $companyId)
+                    ->update(['client_id' => $otherClient->id, 'receiver_company_id' => null]);
+            }
+            
+            // Si la otra empresa recibió facturas mías, crearle un Proveedor con mis datos
+            if ($otherInvoicesReceived) {
+                $otherSupplier = \App\Models\Supplier::withTrashed()
+                    ->where('company_id', $otherCompanyId)
+                    ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuitMy])
+                    ->first();
+                
+                if (!$otherSupplier) {
+                    $otherSupplier = $otherCompany->suppliers()->create([
+                        'document_type' => 'CUIT',
+                        'document_number' => $company->national_id,
+                        'business_name' => $company->name,
+                        'tax_condition' => $company->tax_condition,
+                        'email' => null,
+                        'phone' => null,
+                        'address' => null,
+                    ]);
+                } else if ($otherSupplier->trashed()) {
+                    $otherSupplier->restore();
+                }
+                
+                // Re-vincular facturas que la otra empresa recibió de mí
+                Invoice::where('issuer_company_id', $companyId)
+                    ->where('receiver_company_id', $otherCompanyId)
+                    ->update(['supplier_id' => $otherSupplier->id, 'issuer_company_id' => $otherCompanyId]);
             }
             
             // Eliminar conexión (hard delete)
@@ -369,8 +461,14 @@ class CompanyConnectionController extends Controller
             
         } catch (\Exception $e) {
             DB::rollBack();
-            \Log::error('Error al eliminar conexión: ' . $e->getMessage());
-            return response()->json(['message' => 'Error al eliminar conexión'], 500);
+            \Log::error('Error al eliminar conexión', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'line' => $e->getLine(),
+            ]);
+            return response()->json([
+                'message' => 'Error al eliminar conexión: ' . $e->getMessage()
+            ], 500);
         }
     }
 

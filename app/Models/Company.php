@@ -125,6 +125,11 @@ class Company extends Model
         return $this->hasMany(Client::class);
     }
 
+    public function suppliers()
+    {
+        return $this->hasMany(Supplier::class);
+    }
+
     public function isAfipVerified(): bool
     {
         return $this->verification_status === 'verified';

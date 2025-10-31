@@ -821,7 +821,14 @@ class InvoiceController extends Controller
                 
                 $formattedNumber = sprintf('%04d-%08d', $validated['sales_point'], $validated['invoice_number']);
                 
-                // Verificar si ya existe (por company + type + sales_point + voucher_number)
+                // Eliminar factura soft-deleted si existe
+                Invoice::onlyTrashed()
+                    ->where('issuer_company_id', $company->id)
+                    ->where('type', $invoiceType)
+                    ->where('sales_point', $validated['sales_point'])
+                    ->where('voucher_number', $validated['invoice_number'])
+                    ->forceDelete();
+                
                 $exists = Invoice::where('issuer_company_id', $company->id)
                     ->where('type', $invoiceType)
                     ->where('sales_point', $validated['sales_point'])
@@ -1031,11 +1038,7 @@ class InvoiceController extends Controller
                             'last_number' => $lastAfipNumber,
                         ];
 
-                        $consecutiveOld = 0;
-                        $maxConsecutiveOld = 20; // Stop after 20 consecutive invoices before date range
-
-                        for ($num = $lastAfipNumber; $num > 0; $num--) {
-                            if ($consecutiveOld >= $maxConsecutiveOld) break;
+                        for ($num = 1; $num <= $lastAfipNumber; $num++) {
                             try {
                                 Log::info('🔍 CALLING AFIP consultInvoice', [
                                     'issuer_cuit' => $company->national_id,
@@ -1057,17 +1060,8 @@ class InvoiceController extends Controller
 
                                 $issueDate = \Carbon\Carbon::parse($afipData['issue_date']);
 
-                                // If invoice is older than range, increment counter
-                                if ($issueDate->lt($dateFrom)) {
-                                    $consecutiveOld++;
-                                    continue;
-                                }
-
-                                // Reset counter if we find invoice in range
-                                $consecutiveOld = 0;
-
-                                // Skip if invoice is after date range
-                                if ($issueDate->gt($dateTo)) continue;
+                                // Skip if invoice is outside date range
+                                if ($issueDate->lt($dateFrom) || $issueDate->gt($dateTo)) continue;
 
                                 $formattedNumber = sprintf('%04d-%08d', $salesPoint, $num);
 
