@@ -41,4 +41,7 @@ Route::prefix('v1')->group(function () {
     
     // Accounts Payable routes
     require base_path('routes/api/accounts-payable.php');
+    
+    // Notifications routes
+    require base_path('routes/api/notifications.php');
 });

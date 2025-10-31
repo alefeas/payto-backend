@@ -511,6 +511,16 @@ class InvoiceController extends Controller
                 'last_invoice_number' => $voucherNumber
             ]);
 
+            // Send notifications
+            if ($receiverCompanyId) {
+                \App\Helpers\NotificationHelper::notifyInvoiceReceived($invoice, auth()->id());
+                
+                $receiverCompany = Company::find($receiverCompanyId);
+                if ($receiverCompany && $receiverCompany->required_approvals > 0) {
+                    \App\Helpers\NotificationHelper::notifyInvoicePendingApproval($invoice, auth()->id());
+                }
+            }
+
             DB::commit();
 
             return response()->json([
