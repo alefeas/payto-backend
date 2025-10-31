@@ -73,7 +73,10 @@ class ClientController extends Controller
             'last_name' => 'nullable|string',
             'email' => 'nullable|email',
             'phone' => 'nullable|string',
-            'address' => 'nullable|string', // Domicilio fiscal - opcional, AFIP no lo requiere para facturación
+            'address' => 'nullable|string',
+            'postal_code' => 'nullable|string',
+            'city' => 'nullable|string',
+            'province' => 'nullable|string',
             'tax_condition' => 'required|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
         
@@ -131,6 +134,9 @@ class ClientController extends Controller
             'email' => 'nullable|email',
             'phone' => 'nullable|string',
             'address' => 'nullable|string',
+            'postal_code' => 'nullable|string',
+            'city' => 'nullable|string',
+            'province' => 'nullable|string',
             'tax_condition' => 'sometimes|in:registered_taxpayer,monotax,exempt,final_consumer',
         ]);
         
