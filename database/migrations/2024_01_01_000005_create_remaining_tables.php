@@ -19,6 +19,7 @@ return new class extends Migration
             $table->uuid('requested_by');
             $table->text('message')->nullable();
             $table->softDeletes();
+            $table->timestamps();
             
             $table->unique(['company_id', 'connected_company_id']);
             $table->foreign('company_id')->references('id')->on('companies')->onDelete('cascade');

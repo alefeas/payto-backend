@@ -115,7 +115,7 @@ class CompanyConnectionController extends Controller
         $this->authorize('viewAny', [CompanyConnection::class, $company]);
         
         $requests = CompanyConnection::where('connected_company_id', $companyId)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending_sent', 'pending_received'])
             ->with(['company', 'connectedCompany', 'requestedByUser'])
             ->get()
             ->map(function($connection) {
@@ -141,7 +141,7 @@ class CompanyConnectionController extends Controller
         $this->authorize('viewAny', [CompanyConnection::class, $company]);
         
         $requests = CompanyConnection::where('company_id', $companyId)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending_sent', 'pending_received'])
             ->with(['company', 'connectedCompany', 'requestedByUser'])
             ->get()
             ->map(function($connection) {
@@ -188,7 +188,7 @@ class CompanyConnectionController extends Controller
         if ($existing) {
             if ($existing->status === 'connected') {
                 return response()->json(['message' => 'Ya tienes una conexión establecida con esta empresa'], 422);
-            } else if ($existing->status === 'pending') {
+            } else if (in_array($existing->status, ['pending_sent', 'pending_received'])) {
                 return response()->json(['message' => 'Ya existe una solicitud pendiente con esta empresa'], 422);
             }
         }
@@ -196,7 +196,7 @@ class CompanyConnectionController extends Controller
         $connection = CompanyConnection::create([
             'company_id' => $companyId,
             'connected_company_id' => $targetCompany->id,
-            'status' => 'pending',
+            'status' => 'pending_sent',
             'message' => $validated['message'] ?? null,
             'requested_by' => auth()->id(),
         ]);
@@ -212,13 +212,13 @@ class CompanyConnectionController extends Controller
         $company = Company::findOrFail($companyId);
         $this->authorize('manage', [CompanyConnection::class, $company]);
 
-        $connection = CompanyConnection::findOrFail($connectionId);
+        $connection = CompanyConnection::withTrashed()->findOrFail($connectionId);
 
         if ($connection->connected_company_id !== $companyId) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        if ($connection->status !== 'pending') {
+        if (!in_array($connection->status, ['pending_sent', 'pending_received'])) {
             return response()->json(['message' => 'Esta solicitud ya fue procesada'], 422);
         }
 
@@ -238,17 +238,17 @@ class CompanyConnectionController extends Controller
         $company = Company::findOrFail($companyId);
         $this->authorize('manage', [CompanyConnection::class, $company]);
 
-        $connection = CompanyConnection::findOrFail($connectionId);
+        $connection = CompanyConnection::withTrashed()->findOrFail($connectionId);
 
         if ($connection->connected_company_id !== $companyId) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        if ($connection->status !== 'pending') {
+        if (!in_array($connection->status, ['pending_sent', 'pending_received'])) {
             return response()->json(['message' => 'Esta solicitud ya fue procesada'], 422);
         }
 
-        $connection->delete();
+        $connection->forceDelete();
 
         return response()->json(['message' => 'Solicitud rechazada']);
     }
@@ -266,11 +266,11 @@ class CompanyConnectionController extends Controller
         ->count();
 
         $pendingReceived = CompanyConnection::where('connected_company_id', $companyId)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending_sent', 'pending_received'])
             ->count();
 
         $pendingSent = CompanyConnection::where('company_id', $companyId)
-            ->where('status', 'pending')
+            ->whereIn('status', ['pending_sent', 'pending_received'])
             ->count();
 
         return response()->json([
