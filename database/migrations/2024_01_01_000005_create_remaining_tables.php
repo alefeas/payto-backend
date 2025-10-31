@@ -18,6 +18,7 @@ return new class extends Migration
             $table->timestamp('connected_at')->nullable();
             $table->uuid('requested_by');
             $table->text('message')->nullable();
+            $table->softDeletes();
             
             $table->unique(['company_id', 'connected_company_id']);
             $table->foreign('company_id')->references('id')->on('companies')->onDelete('cascade');
