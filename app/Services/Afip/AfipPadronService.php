@@ -207,18 +207,19 @@ class AfipPadronService
     }
 
     /**
-     * Get mock tax condition based on last digit
+     * Get mock tax condition - random for testing all scenarios
      */
     private function getMockTaxCondition(int $lastDigit): string
     {
         $conditions = [
-            'responsable_inscripto',
-            'monotributo',
-            'exento',
-            'consumidor_final',
+            'registered_taxpayer',
+            'monotax',
+            'exempt',
+            'final_consumer',
         ];
         
-        return $conditions[$lastDigit % 4];
+        // Return random condition for testing purposes
+        return $conditions[array_rand($conditions)];
     }
 
     /**
@@ -253,9 +254,9 @@ class AfipPadronService
         // This mapping depends on AFIP's response structure
         // Adjust based on actual AFIP data
         return match($tipoPersona) {
-            'FISICA' => 'monotributo',
-            'JURIDICA' => 'responsable_inscripto',
-            default => 'consumidor_final',
+            'FISICA' => 'monotax',
+            'JURIDICA' => 'registered_taxpayer',
+            default => 'final_consumer',
         };
     }
 

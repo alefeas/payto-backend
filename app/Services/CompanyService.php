@@ -28,7 +28,7 @@ class CompanyService implements CompanyServiceInterface
             'business_name' => $data['business_name'] ?? null,
             'national_id' => $data['national_id'],
             'phone' => $data['phone'] ?? null,
-            'tax_condition' => $data['tax_condition'] ?? 'registered_taxpayer',
+            'tax_condition' => null,
             'default_sales_point' => $data['default_sales_point'] ?? 1,
             'last_invoice_number' => $data['last_invoice_number'] ?? 0,
             'deletion_code' => bcrypt($data['deletion_code']),
@@ -125,17 +125,9 @@ class CompanyService implements CompanyServiceInterface
         })->toArray();
     }
 
-    private function mapTaxCondition(string $condition): string
-    {
-        $map = [
-            'RI' => 'registered_taxpayer',
-            'Monotributo' => 'monotax',
-            'Exento' => 'exempt',
-            'CF' => 'final_consumer',
-        ];
 
-        return $map[$condition] ?? 'final_consumer';
-    }
+
+
 
     public function getCompanyById(string $companyId, string $userId): array
     {
@@ -179,7 +171,7 @@ class CompanyService implements CompanyServiceInterface
             'business_name' => $data['business_name'] ?? $company->business_name,
             'national_id' => $data['national_id'] ?? $company->national_id,
             'phone' => $data['phone'] ?? $company->phone,
-            'tax_condition' => isset($data['tax_condition']) ? $data['tax_condition'] : $company->tax_condition,
+            'tax_condition' => $data['tax_condition'] ?? $company->tax_condition,
             'default_sales_point' => $data['default_sales_point'] ?? $company->default_sales_point,
             'last_invoice_number' => $data['last_invoice_number'] ?? $company->last_invoice_number,
             'required_approvals' => isset($data['required_approvals']) ? (int)$data['required_approvals'] : $company->required_approvals,

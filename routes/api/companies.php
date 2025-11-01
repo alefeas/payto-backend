@@ -34,6 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // AFIP Padron routes
     Route::get('/companies/{companyId}/afip/fiscal-data', [App\Http\Controllers\Api\AfipPadronController::class, 'getOwnFiscalData']);
+    Route::post('/companies/{companyId}/afip/sync-tax-condition', [App\Http\Controllers\Api\AfipPadronController::class, 'syncTaxCondition']);
     Route::post('/companies/{companyId}/afip/search-cuit', [App\Http\Controllers\Api\AfipPadronController::class, 'searchByCuit']);
     
     // Sales points routes
