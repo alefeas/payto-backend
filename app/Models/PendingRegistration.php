@@ -13,6 +13,7 @@ class PendingRegistration extends Model
     protected $fillable = ['email', 'code', 'user_data', 'expires_at', 'verified_at', 'attempts', 'created_at'];
     protected $casts = [
         'user_data' => 'array',
+        'expires_at' => 'datetime',
         'verified_at' => 'datetime',
         'created_at' => 'datetime',
     ];
@@ -29,9 +30,6 @@ class PendingRegistration extends Model
 
     public function incrementAttempts(): void
     {
-        $this->attempts++;
-        \DB::table('pending_registrations')
-            ->where('id', $this->id)
-            ->update(['attempts' => $this->attempts]);
+        $this->increment('attempts');
     }
 }

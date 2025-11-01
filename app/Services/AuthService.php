@@ -111,12 +111,29 @@ class AuthService implements AuthServiceInterface
             throw new \Exception('No se encontró un registro pendiente para este email');
         }
 
+        \Log::info('Verificando código', [
+            'email' => $email,
+            'code_ingresado' => $code,
+            'code_correcto' => $pending->code,
+            'expires_at_antes' => $pending->expires_at,
+            'attempts_antes' => $pending->attempts,
+        ]);
+
         if ($pending->attempts >= 5) {
             throw new \Exception('Demasiados intentos fallidos. Solicitá un nuevo código.');
         }
 
         if ($pending->code !== $code) {
+            \Log::info('Código incorrecto, incrementando intentos');
             $pending->incrementAttempts();
+            
+            // Refrescar el modelo para ver si cambió algo
+            $pending->refresh();
+            \Log::info('Después de incrementar intentos', [
+                'expires_at_despues' => $pending->expires_at,
+                'attempts_despues' => $pending->attempts,
+            ]);
+            
             throw new \Exception('Código incorrecto. Intentos restantes: ' . (5 - $pending->attempts));
         }
 

@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Attachment;
 use Illuminate\Queue\SerializesModels;
 
 class VerificationCode extends Mailable implements ShouldQueue
@@ -30,5 +31,14 @@ class VerificationCode extends Mailable implements ShouldQueue
         return new Content(
             view: 'emails.verification-code',
         );
+    }
+
+    public function attachments(): array
+    {
+        return [
+            Attachment::fromPath(public_path('images/payto.png'))
+                ->as('logo.png')
+                ->withMime('image/png')
+        ];
     }
 }
