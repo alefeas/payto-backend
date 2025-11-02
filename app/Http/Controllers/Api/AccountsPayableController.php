@@ -268,11 +268,9 @@ class AccountsPayableController extends Controller
                 $invoice->has_bank_data = $hasBankData;
             });
             
-            // Filtrar facturas completamente pagadas usando company_statuses JSON
-            $invoices = $invoices->filter(function($inv) use ($companyId) {
-                $companyStatuses = $inv->company_statuses ?: [];
-                $companyStatus = $companyStatuses[(string)$companyId] ?? null;
-                return $companyStatus !== 'paid' && $inv->pending_amount > 0;
+            // Filtrar solo facturas con saldo pendiente (excluir pagadas completamente)
+            $invoices = $invoices->filter(function($inv) {
+                return $inv->pending_amount > 0;
             })->values();
             
             // Aplicar filtro de payment_status si existe

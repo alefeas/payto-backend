@@ -461,9 +461,30 @@ class InvoiceController extends Controller
             $receiverDocument = null;
             
             if ($receiverCompanyId) {
+                // Si seleccionó empresa conectada, crear cliente automáticamente
                 $receiverCompany = Company::findOrFail($receiverCompanyId);
                 $receiverName = $receiverCompany->name;
                 $receiverDocument = $receiverCompany->national_id;
+                
+                // Buscar o crear cliente con estos datos
+                $client = \App\Models\Client::firstOrCreate(
+                    [
+                        'company_id' => $companyId,
+                        'document_number' => $receiverDocument,
+                    ],
+                    [
+                        'document_type' => 'CUIT',
+                        'business_name' => $receiverName,
+                        'tax_condition' => $receiverCompany->tax_condition ?? 'registered_taxpayer',
+                        'email' => $receiverCompany->email ?? null,
+                        'phone' => $receiverCompany->phone ?? null,
+                        'address' => $receiverCompany->address ? ($receiverCompany->address->street . ' ' . $receiverCompany->address->street_number) : null,
+                        'city' => $receiverCompany->address->city ?? null,
+                        'province' => $receiverCompany->address->province ?? null,
+                        'postal_code' => $receiverCompany->address->postal_code ?? null,
+                    ]
+                );
+                $clientId = $client->id;
             } elseif ($clientId) {
                 $client = \App\Models\Client::findOrFail($clientId);
                 $receiverName = $client->business_name 
@@ -472,7 +493,7 @@ class InvoiceController extends Controller
                 $receiverDocument = $client->document_number;
             }
             
-            // Crear factura para el EMISOR solamente
+            // Crear factura (si hay empresa conectada, usar receiver_company_id)
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
                 'type' => $invoiceType,
@@ -484,6 +505,8 @@ class InvoiceController extends Controller
                 'issuer_company_id' => $companyId,
                 'receiver_company_id' => $receiverCompanyId,
                 'client_id' => $clientId,
+                'receiver_name' => $receiverName,
+                'receiver_document' => $receiverDocument,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'] ?? now()->addDays(30),
                 'subtotal' => $subtotal,
@@ -983,7 +1006,6 @@ class InvoiceController extends Controller
                     }
                     
                     // AFIP no devuelve el concepto - usar default 'products'
-                    // El usuario puede editarlo manualmente después
                     $concept = 'products';
                     
                     $invoice = Invoice::create([
@@ -1328,6 +1350,7 @@ class InvoiceController extends Controller
             'number' => 'nullable|string|max:50',
             'voucher_number' => 'nullable|max:50',
             'sales_point' => 'nullable|integer|min:1|max:9999',
+            'concept' => 'nullable|in:products,services,products_services',
             'issue_date' => 'required|date',
             'due_date' => 'required|date|after_or_equal:issue_date|before:2031-01-01',
             'currency' => 'required|string|size:3',
@@ -1437,23 +1460,115 @@ class InvoiceController extends Controller
             if (!empty($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::with(['client', 'receiverCompany'])->find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
-                    $clientId = $relatedInvoice->client_id;
-                    $receiverCompanyId = $relatedInvoice->receiver_company_id;
-                    $clientName = $relatedInvoice->receiver_name;
-                    $clientDocument = $relatedInvoice->receiver_document;
+                    // PRIORIDAD 1: Si tiene client_id, usarlo
+                    if ($relatedInvoice->client_id) {
+                        $clientId = $relatedInvoice->client_id;
+                        $client = \App\Models\Client::withTrashed()->find($clientId);
+                        if ($client) {
+                            $clientName = $client->business_name ?? trim($client->first_name . ' ' . $client->last_name);
+                            $clientDocument = $client->document_number;
+                        }
+                    }
+                    // PRIORIDAD 2: Si tiene receiver_name/receiver_document pero no client_id, usar esos datos
+                    elseif ($relatedInvoice->receiver_name && $relatedInvoice->receiver_document) {
+                        $clientName = $relatedInvoice->receiver_name;
+                        $clientDocument = $relatedInvoice->receiver_document;
+                        // Intentar encontrar o crear el cliente
+                        $client = \App\Models\Client::withTrashed()
+                            ->where('company_id', $companyId)
+                            ->where('document_number', $clientDocument)
+                            ->first();
+                        if ($client) {
+                            $clientId = $client->id;
+                        }
+                    }
+                    // PRIORIDAD 3: Si tiene receiverCompany, crear cliente desde ahí
+                    elseif ($relatedInvoice->receiverCompany) {
+                        $clientName = $relatedInvoice->receiverCompany->name;
+                        $clientDocument = $relatedInvoice->receiverCompany->national_id;
+                        $client = \App\Models\Client::firstOrCreate(
+                            [
+                                'company_id' => $companyId,
+                                'document_number' => $clientDocument,
+                            ],
+                            [
+                                'document_type' => 'CUIT',
+                                'business_name' => $clientName,
+                                'tax_condition' => $relatedInvoice->receiverCompany->tax_condition ?? 'registered_taxpayer',
+                            ]
+                        );
+                        $clientId = $client->id;
+                    }
                     
-                    Log::info('Inherited client/receiver from related invoice', [
+                    Log::info('Inherited client from related invoice', [
                         'related_invoice_id' => $relatedInvoice->id,
                         'client_id' => $clientId,
-                        'receiver_company_id' => $receiverCompanyId,
                         'client_name' => $clientName,
+                        'client_document' => $clientDocument,
                     ]);
                 }
             } else {
-                $clientId = $validated['client_id'] ?? null;
                 $receiverCompanyId = $validated['receiver_company_id'] ?? null;
-                $clientName = $validated['client_name'] ?? null;
-                $clientDocument = $validated['client_document'] ?? null;
+                
+                Log::info('Manual issued invoice - Processing receiver', [
+                    'receiver_company_id' => $receiverCompanyId,
+                    'client_id_from_request' => $validated['client_id'] ?? null,
+                ]);
+                
+                // Si seleccionó empresa conectada, crear cliente automáticamente
+                if ($receiverCompanyId) {
+                    $receiverCompany = Company::findOrFail($receiverCompanyId);
+                    $clientName = $receiverCompany->name;
+                    $clientDocument = $receiverCompany->national_id;
+                    
+                    Log::info('Creating/finding client from connected company', [
+                        'company_name' => $clientName,
+                        'document' => $clientDocument,
+                    ]);
+                    
+                    $client = \App\Models\Client::firstOrCreate(
+                        [
+                            'company_id' => $companyId,
+                            'document_number' => $clientDocument,
+                        ],
+                        [
+                            'document_type' => 'CUIT',
+                            'business_name' => $clientName,
+                            'tax_condition' => $receiverCompany->tax_condition ?? 'registered_taxpayer',
+                            'email' => $receiverCompany->email ?? null,
+                            'phone' => $receiverCompany->phone ?? null,
+                            'address' => $receiverCompany->address ? ($receiverCompany->address->street . ' ' . $receiverCompany->address->street_number) : null,
+                            'city' => $receiverCompany->address->city ?? null,
+                            'province' => $receiverCompany->address->province ?? null,
+                            'postal_code' => $receiverCompany->address->postal_code ?? null,
+                        ]
+                    );
+                    $clientId = $client->id;
+                    
+                    Log::info('Client created/found', [
+                        'client_id' => $clientId,
+                        'client_name' => $client->business_name,
+                    ]);
+                } else {
+                    $clientId = $validated['client_id'] ?? null;
+                    $clientName = $validated['client_name'] ?? null;
+                    $clientDocument = $validated['client_document'] ?? null;
+                    
+                    // Si tiene client_id pero no tiene nombre, obtenerlo del cliente
+                    if ($clientId && !$clientName) {
+                        $client = \App\Models\Client::withTrashed()->find($clientId);
+                        if ($client) {
+                            $clientName = $client->business_name ?? trim($client->first_name . ' ' . $client->last_name);
+                            $clientDocument = $client->document_number;
+                        }
+                    }
+                    
+                    Log::info('Using existing client or manual data', [
+                        'client_id' => $clientId,
+                        'client_name' => $clientName,
+                        'client_document' => $clientDocument,
+                    ]);
+                }
             }
             
             // Check for duplicate invoice
@@ -1470,16 +1585,24 @@ class InvoiceController extends Controller
                 ], 422);
             }
             
-            // Create manual issued invoice
+            // Create manual issued invoice (NO enviar a empresa conectada)
+            Log::info('Creating manual issued invoice with data', [
+                'client_id' => $clientId,
+                'receiver_name' => $clientName,
+                'receiver_document' => $clientDocument,
+            ]);
+            
             $invoice = Invoice::create([
                 'number' => $invoiceNumber,
                 'type' => $invoiceTypeInternal,
                 'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
-                'concept' => 'products',
+                'concept' => $validated['concept'] ?? 'products',
                 'issuer_company_id' => $companyId,
-                'receiver_company_id' => $receiverCompanyId,
+                'receiver_company_id' => null, // NO usar receiver_company_id en carga manual
                 'client_id' => $clientId,
+                'receiver_name' => $clientName,
+                'receiver_document' => $clientDocument,
                 'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
@@ -1492,8 +1615,6 @@ class InvoiceController extends Controller
                 'notes' => $validated['notes'] ?? null,
                 'status' => 'issued',
                 'afip_status' => 'approved',
-                'receiver_name' => $clientName,
-                'receiver_document' => $clientDocument,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
                 'is_manual_load' => true,
@@ -1526,9 +1647,21 @@ class InvoiceController extends Controller
             
             DB::commit();
 
+            // Determinar si se creó un cliente automáticamente
+            $autoCreatedClient = false;
+            if ($receiverCompanyId && $clientId) {
+                $autoCreatedClient = true;
+            }
+
+            $message = 'Factura emitida creada exitosamente';
+            if ($autoCreatedClient) {
+                $message .= '. Se creó automáticamente el cliente en tu lista de clientes externos.';
+            }
+
             return response()->json([
-                'message' => 'Factura emitida creada exitosamente',
+                'message' => $message,
                 'invoice' => $invoice->load(['items']),
+                'auto_created_client' => $autoCreatedClient,
             ], 201);
 
         } catch (\Exception $e) {
@@ -1578,6 +1711,7 @@ class InvoiceController extends Controller
             'number' => 'nullable|string|max:50',
             'voucher_number' => 'nullable|max:50',
             'sales_point' => 'nullable|integer|min:1|max:9999',
+            'concept' => 'nullable|in:products,services,products_services',
             'issue_date' => 'required|date',
             'due_date' => 'required|date|after_or_equal:issue_date|before:2030-01-01',
             'currency' => 'required|string|size:3',
@@ -1714,16 +1848,51 @@ class InvoiceController extends Controller
             if (!empty($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::with(['supplier', 'issuerCompany'])->find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
-                    $supplierId = $relatedInvoice->supplier_id;
-                    $issuerCompanyId = $relatedInvoice->issuer_company_id;
-                    $supplierName = $relatedInvoice->issuer_name;
-                    $supplierDocument = $relatedInvoice->issuer_document;
+                    // PRIORIDAD 1: Si tiene supplier_id, usarlo
+                    if ($relatedInvoice->supplier_id) {
+                        $supplierId = $relatedInvoice->supplier_id;
+                        $supplier = \App\Models\Supplier::withTrashed()->find($supplierId);
+                        if ($supplier) {
+                            $supplierName = $supplier->business_name ?? trim($supplier->first_name . ' ' . $supplier->last_name);
+                            $supplierDocument = $supplier->document_number;
+                        }
+                    }
+                    // PRIORIDAD 2: Si tiene issuer_name/issuer_document pero no supplier_id, usar esos datos
+                    elseif ($relatedInvoice->issuer_name && $relatedInvoice->issuer_document) {
+                        $supplierName = $relatedInvoice->issuer_name;
+                        $supplierDocument = $relatedInvoice->issuer_document;
+                        // Intentar encontrar o crear el proveedor
+                        $supplier = \App\Models\Supplier::withTrashed()
+                            ->where('company_id', $companyId)
+                            ->where('document_number', $supplierDocument)
+                            ->first();
+                        if ($supplier) {
+                            $supplierId = $supplier->id;
+                        }
+                    }
+                    // PRIORIDAD 3: Si tiene issuerCompany, crear proveedor desde ahí
+                    elseif ($relatedInvoice->issuerCompany) {
+                        $supplierName = $relatedInvoice->issuerCompany->name;
+                        $supplierDocument = $relatedInvoice->issuerCompany->national_id;
+                        $supplier = \App\Models\Supplier::firstOrCreate(
+                            [
+                                'company_id' => $companyId,
+                                'document_number' => $supplierDocument,
+                            ],
+                            [
+                                'document_type' => 'CUIT',
+                                'business_name' => $supplierName,
+                                'tax_condition' => $relatedInvoice->issuerCompany->tax_condition ?? 'registered_taxpayer',
+                            ]
+                        );
+                        $supplierId = $supplier->id;
+                    }
                     
-                    Log::info('Inherited supplier/issuer from related invoice', [
+                    Log::info('Inherited supplier from related invoice', [
                         'related_invoice_id' => $relatedInvoice->id,
                         'supplier_id' => $supplierId,
-                        'issuer_company_id' => $issuerCompanyId,
                         'supplier_name' => $supplierName,
+                        'supplier_document' => $supplierDocument,
                     ]);
                 }
             } elseif (!empty($validated['supplier_id'])) {
@@ -1733,11 +1902,39 @@ class InvoiceController extends Controller
                 $supplierName = $supplier->business_name ?? trim($supplier->first_name . ' ' . $supplier->last_name);
                 $supplierDocument = $supplier->document_number;
             } elseif (!empty($validated['issuer_company_id'])) {
-                // Using connected company
+                // Si seleccionó empresa conectada, crear proveedor automáticamente
                 $issuerCompany = Company::findOrFail($validated['issuer_company_id']);
                 $supplierName = $issuerCompany->name;
                 $supplierDocument = $issuerCompany->national_id;
-                $issuerCompanyId = $issuerCompany->id;
+                
+                Log::info('Creating/finding supplier from connected company', [
+                    'company_name' => $supplierName,
+                    'document' => $supplierDocument,
+                ]);
+                
+                $supplier = \App\Models\Supplier::firstOrCreate(
+                    [
+                        'company_id' => $companyId,
+                        'document_number' => $supplierDocument,
+                    ],
+                    [
+                        'document_type' => 'CUIT',
+                        'business_name' => $supplierName,
+                        'tax_condition' => $issuerCompany->tax_condition ?? 'registered_taxpayer',
+                        'email' => $issuerCompany->email ?? null,
+                        'phone' => $issuerCompany->phone ?? null,
+                        'address' => $issuerCompany->address ? ($issuerCompany->address->street . ' ' . $issuerCompany->address->street_number) : null,
+                        'city' => $issuerCompany->address->city ?? null,
+                        'province' => $issuerCompany->address->province ?? null,
+                        'postal_code' => $issuerCompany->address->postal_code ?? null,
+                    ]
+                );
+                $supplierId = $supplier->id;
+                
+                Log::info('Supplier created/found', [
+                    'supplier_id' => $supplierId,
+                    'supplier_name' => $supplier->business_name,
+                ]);
             } else {
                 // Manual supplier data
                 $supplierName = $validated['supplier_name'] ?? null;
@@ -1750,19 +1947,12 @@ class InvoiceController extends Controller
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
             
-            // Check for duplicate: same receiver + supplier + type + number
+            // Check for duplicate: same receiver + type + sales_point + number
             $existingInvoice = Invoice::withTrashed()
                 ->where('receiver_company_id', $companyId)
                 ->where('type', $invoiceTypeInternal)
                 ->where('sales_point', $salesPoint)
                 ->where('voucher_number', $voucherNumber)
-                ->where(function($q) use ($supplierDocument, $issuerCompanyId) {
-                    if ($issuerCompanyId) {
-                        $q->where('issuer_company_id', $issuerCompanyId);
-                    } else {
-                        $q->where('issuer_document', $supplierDocument);
-                    }
-                })
                 ->first();
                 
             if ($existingInvoice) {
@@ -1784,17 +1974,19 @@ class InvoiceController extends Controller
                 ], 422);
             }
             
-            // Create manual received invoice
+            // Create manual received invoice (NO enviar a empresa conectada)
             try {
                 $invoice = Invoice::create([
                 'number' => $invoiceNumber,
                 'type' => $invoiceTypeInternal,
                 'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
-                'concept' => 'products',
-                'issuer_company_id' => $issuerCompanyId ?? $companyId, // Connected company or placeholder
+                'concept' => $validated['concept'] ?? 'products',
+                'issuer_company_id' => $companyId, // Placeholder para constraint
                 'receiver_company_id' => $companyId, // Your company receives
                 'supplier_id' => $supplierId,
+                'issuer_name' => $supplierName,
+                'issuer_document' => $supplierDocument,
                 'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
@@ -1810,11 +2002,9 @@ class InvoiceController extends Controller
                 'approvals_required' => $requiredApprovals,
                 'approvals_received' => 0,
                 'approval_date' => $requiredApprovals === 0 ? now() : null,
-                'issuer_name' => $supplierName,
-                'issuer_document' => $supplierDocument,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
-                'manual_supplier' => empty($validated['issuer_company_id']),
+                'manual_supplier' => true,
                 'is_manual_load' => true,
                 'created_by' => auth()->id(),
             ]);
@@ -1881,9 +2071,21 @@ class InvoiceController extends Controller
             
             DB::commit();
 
+            // Determinar si se creó un proveedor automáticamente
+            $autoCreatedSupplier = false;
+            if (!empty($validated['issuer_company_id']) && $supplierId) {
+                $autoCreatedSupplier = true;
+            }
+
+            $message = 'Factura recibida creada exitosamente';
+            if ($autoCreatedSupplier) {
+                $message .= '. Se creó automáticamente el proveedor en tu lista de proveedores externos.';
+            }
+
             return response()->json([
-                'message' => 'Factura recibida creada exitosamente',
-                'invoice' => $invoice->load(['items', 'perceptions']),
+                'message' => $message,
+                'invoice' => $invoice->load(['items', 'perceptions', 'supplier']),
+                'auto_created_supplier' => $autoCreatedSupplier,
             ], 201);
 
         } catch (\Exception $e) {
@@ -2453,6 +2655,183 @@ class InvoiceController extends Controller
         return $cuit;
     }
     
+    /**
+     * Get invoices that can be associated with NC/ND for /emit-invoice
+     */
+    public function getAssociableInvoicesForEmit(Request $request, $companyId)
+    {
+        $validated = $request->validate([
+            'invoice_type' => 'required|string',
+        ]);
+        
+        $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+        $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+        $isND = in_array($invoiceType, ['NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+        
+        if (!$isNC && !$isND) {
+            return response()->json(['invoices' => []]);
+        }
+        
+        // Facturas emitidas a través de AFIP (con CAE): incluye emitidas desde el sistema Y sincronizadas de AFIP
+        $invoices = Invoice::where('issuer_company_id', $companyId)
+            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
+            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->where('status', '!=', 'cancelled')
+            ->with(['client', 'receiverCompany'])
+            ->orderBy('issue_date', 'desc')
+            ->get()
+            ->map(function($inv) {
+                $origin = $inv->synced_from_afip ? 'Sincronizada AFIP' : 'Emitida desde sistema';
+                $statusLabel = match($inv->status) {
+                    'issued' => 'Emitida',
+                    'approved' => 'Aprobada',
+                    'paid' => 'Pagada',
+                    'partially_cancelled' => 'Parcialmente anulada',
+                    default => ucfirst($inv->status)
+                };
+                
+                return [
+                    'id' => $inv->id,
+                    'number' => $inv->number,
+                    'type' => $inv->type,
+                    'issue_date' => $inv->issue_date,
+                    'total' => $inv->total,
+                    'receiver_name' => $inv->receiver_name ?? $inv->receiverCompany?->name ?? $inv->client?->business_name,
+                    'status' => $inv->status,
+                    'status_label' => $statusLabel,
+                    'origin' => $origin,
+                    'is_manual_load' => $inv->is_manual_load ?? false,
+                    'synced_from_afip' => $inv->synced_from_afip ?? false,
+                ];
+            });
+        
+        return response()->json(['invoices' => $invoices]);
+    }
+    
+    /**
+     * Get invoices that can be associated with NC/ND for /load-invoice received
+     */
+    public function getAssociableInvoicesForReceived(Request $request, $companyId)
+    {
+        $validated = $request->validate([
+            'invoice_type' => 'required|string',
+            'supplier_id' => 'nullable|exists:suppliers,id',
+            'issuer_document' => 'nullable|string',
+        ]);
+        
+        $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+        $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+        $isND = in_array($invoiceType, ['NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+        
+        if (!$isNC && !$isND) {
+            return response()->json(['invoices' => []]);
+        }
+        
+        // Facturas recibidas de ese mismo proveedor
+        $query = Invoice::where('receiver_company_id', $companyId)
+            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->where('status', '!=', 'cancelled');
+        
+        if (!empty($validated['supplier_id'])) {
+            $query->where('supplier_id', $validated['supplier_id']);
+        } elseif (!empty($validated['issuer_document'])) {
+            $query->where('issuer_document', $validated['issuer_document']);
+        }
+        
+        $invoices = $query->with(['supplier'])
+            ->orderBy('issue_date', 'desc')
+            ->get()
+            ->map(function($inv) {
+                $origin = $inv->is_manual_load ? 'Cargada manualmente' : 'Recibida automática';
+                $statusLabel = match($inv->status) {
+                    'pending_approval' => 'Pendiente aprobación',
+                    'approved' => 'Aprobada',
+                    'paid' => 'Pagada',
+                    'partially_cancelled' => 'Parcialmente anulada',
+                    default => ucfirst($inv->status)
+                };
+                
+                return [
+                    'id' => $inv->id,
+                    'number' => $inv->number,
+                    'type' => $inv->type,
+                    'issue_date' => $inv->issue_date,
+                    'total' => $inv->total,
+                    'issuer_name' => $inv->issuer_name ?? $inv->supplier?->business_name,
+                    'status' => $inv->status,
+                    'status_label' => $statusLabel,
+                    'origin' => $origin,
+                    'is_manual_load' => $inv->is_manual_load ?? false,
+                    'synced_from_afip' => $inv->synced_from_afip ?? false,
+                ];
+            });
+        
+        return response()->json(['invoices' => $invoices]);
+    }
+    
+    /**
+     * Get invoices that can be associated with NC/ND for /load-invoice issued
+     */
+    public function getAssociableInvoicesForIssued(Request $request, $companyId)
+    {
+        $validated = $request->validate([
+            'invoice_type' => 'required|string',
+            'client_id' => 'nullable|exists:clients,id',
+            'receiver_document' => 'nullable|string',
+        ]);
+        
+        $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+        $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+        $isND = in_array($invoiceType, ['NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+        
+        if (!$isNC && !$isND) {
+            return response()->json(['invoices' => []]);
+        }
+        
+        // Facturas emitidas manualmente hacia ese mismo cliente
+        $query = Invoice::where('issuer_company_id', $companyId)
+            ->where('is_manual_load', true)
+            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->where('status', '!=', 'cancelled');
+        
+        if (!empty($validated['client_id'])) {
+            $query->where('client_id', $validated['client_id']);
+        } elseif (!empty($validated['receiver_document'])) {
+            $query->where('receiver_document', $validated['receiver_document']);
+        }
+        
+        $invoices = $query->with(['client'])
+            ->orderBy('issue_date', 'desc')
+            ->get()
+            ->map(function($inv) {
+                $origin = 'Cargada manualmente';
+                $statusLabel = match($inv->status) {
+                    'issued' => 'Emitida',
+                    'approved' => 'Aprobada',
+                    'paid' => 'Pagada',
+                    'partially_cancelled' => 'Parcialmente anulada',
+                    default => ucfirst($inv->status)
+                };
+                
+                return [
+                    'id' => $inv->id,
+                    'number' => $inv->number,
+                    'type' => $inv->type,
+                    'issue_date' => $inv->issue_date,
+                    'total' => $inv->total,
+                    'receiver_name' => $inv->receiver_name ?? $inv->client?->business_name,
+                    'status' => $inv->status,
+                    'status_label' => $statusLabel,
+                    'origin' => $origin,
+                    'is_manual_load' => $inv->is_manual_load ?? false,
+                    'synced_from_afip' => $inv->synced_from_afip ?? false,
+                ];
+            });
+        
+        return response()->json(['invoices' => $invoices]);
+    }
+
     /**
      * Update related invoice balance when a NC/ND is created
      */

@@ -85,6 +85,8 @@ class VoucherController extends Controller
                     'concept' => $invoice->concept ?? 'products',
                     'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                    'currency' => $invoice->currency ?? 'ARS',
+                    'exchange_rate' => $invoice->exchange_rate ?? 1,
                 ];
             });
         
@@ -138,6 +140,8 @@ class VoucherController extends Controller
                     'concept' => $invoice->concept ?? 'products',
                     'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                    'currency' => $invoice->currency ?? 'ARS',
+                    'exchange_rate' => $invoice->exchange_rate ?? 1,
                 ];
             });
         
@@ -257,6 +261,8 @@ class VoucherController extends Controller
                     'concept' => $invoice->concept ?? 'products',
                     'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                    'currency' => $invoice->currency ?? 'ARS',
+                    'exchange_rate' => $invoice->exchange_rate ?? 1,
                     'client_id' => $invoice->client_id,
                     'receiver_company_id' => $invoice->receiver_company_id,
                     'receiver_name' => $invoice->receiver_name,
@@ -382,6 +388,11 @@ class VoucherController extends Controller
             
             DB::commit();
             
+            // Enviar notificación si el receptor es una empresa conectada
+            if ($voucher->receiver_company_id) {
+                \App\Helpers\NotificationHelper::notifyInvoiceReceived($voucher, auth()->id());
+            }
+            
             return response()->json([
                 'message' => 'Comprobante creado exitosamente',
                 'voucher' => $voucher->load(['client', 'items', 'relatedInvoice', 'perceptions']),
@@ -406,14 +417,33 @@ class VoucherController extends Controller
 
     private function createVoucher(array $data, string $type, Company $company): Invoice
     {
-        // Obtener último número
-        $lastInvoice = Invoice::where('issuer_company_id', $company->id)
-            ->where('type', $type)
-            ->where('sales_point', $data['sales_point'])
-            ->orderBy('voucher_number', 'desc')
-            ->first();
+        // Consultar último número autorizado en AFIP
+        $afipService = new AfipInvoiceService($company);
+        $invoiceTypeCode = (int) VoucherTypeService::getAfipCode($type);
         
-        $voucherNumber = ($lastInvoice ? $lastInvoice->voucher_number : 0) + 1;
+        try {
+            $lastAfipNumber = $afipService->getLastAuthorizedInvoice(
+                $data['sales_point'],
+                $invoiceTypeCode
+            );
+            $voucherNumber = $lastAfipNumber + 1;
+            
+            Log::info('Using AFIP last number for voucher', [
+                'sales_point' => $data['sales_point'],
+                'type' => $type,
+                'last_afip' => $lastAfipNumber,
+                'next_number' => $voucherNumber
+            ]);
+        } catch (\Exception $e) {
+            Log::error('AFIP query failed for voucher', [
+                'company_id' => $company->id,
+                'sales_point' => $data['sales_point'],
+                'type' => $type,
+                'error' => $e->getMessage()
+            ]);
+            
+            throw new \Exception('No se pudo consultar AFIP: ' . $e->getMessage());
+        }
         
         // Calcular totales
         $subtotal = 0;
@@ -481,7 +511,7 @@ class VoucherController extends Controller
         } else {
             // Sin factura relacionada, usar datos del request
             $clientId = $data['client_id'] ?? null;
-            $receiverCompanyId = null;
+            $receiverCompanyId = $data['receiver_company_id'] ?? null;
             $receiverName = null;
             $receiverCuit = null;
             $receiverAddress = null;
@@ -526,8 +556,8 @@ class VoucherController extends Controller
             'related_invoice_id' => $data['related_invoice_id'] ?? null,
             'issue_date' => $data['issue_date'],
             'due_date' => $data['due_date'] ?? now()->addDays(30),
-            'service_date_from' => $data['service_date_from'] ?? null,
-            'service_date_to' => $data['service_date_to'] ?? null,
+            'service_date_from' => !empty($data['service_date_from']) ? $data['service_date_from'] : null,
+            'service_date_to' => !empty($data['service_date_to']) ? $data['service_date_to'] : null,
             'subtotal' => $subtotal,
             'total_taxes' => $totalTaxes,
             'total_perceptions' => $totalPerceptions,

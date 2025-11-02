@@ -22,13 +22,17 @@ class InvoicePdfService
             // Load relationships conditionally
             $with = [
                 'client' => function($query) { $query->withTrashed(); },
-                'supplier.bankAccounts' => function($query) { $query->withTrashed(); },
                 'items', 
                 'perceptions'
             ];
             
-            // Only load issuerCompany if it exists
-            if ($invoice->issuer_company_id && !$invoice->manual_supplier) {
+            // Load supplier if exists
+            if ($invoice->supplier_id) {
+                $with['supplier'] = function($query) { $query->withTrashed(); };
+            }
+            
+            // Only load issuerCompany if it exists and is not a manual received invoice
+            if ($invoice->issuer_company_id && !$invoice->manual_supplier && !$invoice->supplier_id) {
                 $with['issuerCompany.address'] = function($query) {};
                 $with['issuerCompany.bankAccounts'] = function($query) {};
             }

@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', [InvoiceController::class, 'index']);
 Route::get('/next-number', [InvoiceController::class, 'getNextNumber']);
+Route::get('/associable-for-emit', [InvoiceController::class, 'getAssociableInvoicesForEmit']);
+Route::get('/associable-for-received', [InvoiceController::class, 'getAssociableInvoicesForReceived']);
+Route::get('/associable-for-issued', [InvoiceController::class, 'getAssociableInvoicesForIssued']);
 Route::delete('/delete-all', [InvoiceController::class, 'deleteAll']);
 Route::post('/', [InvoiceController::class, 'store']);
 Route::post('/manual-issued', [InvoiceController::class, 'storeManualIssued']);

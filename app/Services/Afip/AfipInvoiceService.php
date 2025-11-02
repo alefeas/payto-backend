@@ -409,18 +409,83 @@ class AfipInvoiceService
         }
         $detRequest['Tributos'] = $this->buildTributosArray($invoice);
 
-        // Agregar comprobante asociado para NC/ND (solo si tiene CAE)
+        // NOTA: AFIP NO permite enviar notas de texto libre en el campo Opcionales
+        // El campo Opcionales tiene IDs específicos con formatos estrictos (ej: 2101 requiere CBU)
+        // Las notas del sistema se guardan en BD pero NO se envían a AFIP
+        
+        // Agregar comprobante asociado para NC/ND (OBLIGATORIO según AFIP)
         $category = \App\Services\VoucherTypeService::getCategory($invoice->type);
-        if (in_array($category, ['credit_note', 'debit_note']) && $invoice->related_invoice_id) {
-            $relatedInvoice = Invoice::find($invoice->related_invoice_id);
-            if ($relatedInvoice && $relatedInvoice->afip_cae && $relatedInvoice->afip_status === 'approved') {
-                $detRequest['CbtesAsoc'] = [
-                    'CbteAsoc' => [
-                        'Tipo' => $this->getAfipInvoiceType($relatedInvoice->type),
-                        'PtoVta' => $relatedInvoice->sales_point,
-                        'Nro' => $relatedInvoice->voucher_number,
-                    ],
+        if (in_array($category, ['credit_note', 'debit_note'])) {
+            if ($invoice->related_invoice_id) {
+                // Opción 1: Asociar a factura específica (CbteAsoc)
+                $relatedInvoice = Invoice::find($invoice->related_invoice_id);
+                if ($relatedInvoice) {
+                    // Validar que la factura asociada tenga CAE (AFIP lo requiere)
+                    if (!$relatedInvoice->afip_cae || $relatedInvoice->afip_status !== 'approved') {
+                        throw new \Exception(
+                            "No se puede emitir NC/ND electrónica sobre la factura {$relatedInvoice->number} porque no tiene CAE de AFIP. "
+                            . "Solo se pueden asociar facturas que fueron autorizadas electrónicamente por AFIP. "
+                            . "Para facturas manuales históricas sin CAE, emití la NC/ND sin asociar (se usará período asociado)."
+                        );
+                    }
+                    
+                    // Validar monto de NC no supere el balance pendiente
+                    if ($category === 'credit_note') {
+                        // Recalcular balance actual considerando NC/ND previas
+                        $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                            ->where('status', '!=', 'cancelled')
+                            ->where('afip_status', 'approved')
+                            ->sum('total');
+                        
+                        $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                            ->where('status', '!=', 'cancelled')
+                            ->where('afip_status', 'approved')
+                            ->sum('total');
+                        
+                        $currentBalance = $relatedInvoice->total + $totalND - $totalNC;
+                        
+                        if ($invoice->total > $currentBalance) {
+                            throw new \Exception(
+                                "El monto de la Nota de Crédito (\${$invoice->total}) no puede superar el saldo pendiente de la factura (\${$currentBalance}). "
+                                . "Factura original: \${$relatedInvoice->total} | NC previas: \${$totalNC} | ND previas: \${$totalND}"
+                            );
+                        }
+                    }
+                    
+                    $detRequest['CbtesAsoc'] = [
+                        'CbteAsoc' => [
+                            'Tipo' => $this->getAfipInvoiceType($relatedInvoice->type),
+                            'PtoVta' => $relatedInvoice->sales_point,
+                            'Nro' => $relatedInvoice->voucher_number,
+                        ],
+                    ];
+                    
+                    Log::info('Added CbteAsoc for NC/ND', [
+                        'voucher_id' => $invoice->id,
+                        'related_invoice_id' => $relatedInvoice->id,
+                        'related_type' => $relatedInvoice->type,
+                        'related_number' => $relatedInvoice->number,
+                        'related_cae' => $relatedInvoice->afip_cae,
+                    ]);
+                }
+            } else {
+                // Opción 2: Sin factura específica, usar PeriodoAsoc (período del mes)
+                $issueDate = $invoice->issue_date;
+                $periodFrom = $issueDate->copy()->startOfMonth();
+                $periodTo = $issueDate->copy(); // Hasta la fecha de emisión (no puede ser posterior)
+                
+                $detRequest['PeriodoAsoc'] = [
+                    'FchDesde' => $periodFrom->format('Ymd'),
+                    'FchHasta' => $periodTo->format('Ymd'),
                 ];
+                
+                Log::info('Added PeriodoAsoc for NC/ND without specific invoice', [
+                    'voucher_id' => $invoice->id,
+                    'period_from' => $periodFrom->format('Y-m-d'),
+                    'period_to' => $periodTo->format('Y-m-d'),
+                ]);
             }
         }
 
