@@ -18,7 +18,13 @@ class VoucherValidationService
         switch ($category) {
             case 'credit_note':
             case 'debit_note':
-                $rules = array_merge($rules, $this->getAssociatedVoucherRules());
+                // Si tiene related_invoice_id, es una nota asociada
+                if (isset($data['related_invoice_id'])) {
+                    $rules = array_merge($rules, $this->getAssociatedVoucherRules());
+                } else {
+                    // Si no tiene factura asociada, requiere cliente
+                    $rules['client_id'] = 'required_without:client_data|exists:clients,id';
+                }
                 break;
             case 'fce_mipyme':
                 $rules = array_merge($rules, $this->getFCEMipymeRules());
@@ -28,6 +34,10 @@ class VoucherValidationService
                 break;
             case 'used_goods_purchase':
                 $rules = array_merge($rules, $this->getUsedGoodsPurchaseRules());
+                break;
+            default:
+                // Para facturas normales, requiere cliente
+                $rules['client_id'] = 'required_without:client_data|exists:clients,id';
                 break;
         }
         
@@ -49,18 +59,11 @@ class VoucherValidationService
     private function getBaseRules(string $type): array
     {
         $hasAmounts = VoucherTypeService::hasAmounts($type);
-        $category = VoucherTypeService::getCategory($type);
-        $isAssociatedNote = in_array($category, ['credit_note', 'debit_note']);
         
         $rules = [
             'sales_point' => 'required|integer|min:1|max:9999',
             'issue_date' => 'required|date',
         ];
-        
-        // Solo requerir cliente si NO es una nota asociada (se toma de la factura)
-        if (!$isAssociatedNote) {
-            $rules['client_id'] = 'required_without:client_data|exists:clients,id';
-        }
         
         if ($hasAmounts) {
             $rules = array_merge($rules, [
@@ -135,6 +138,18 @@ class VoucherValidationService
         
         if (!$relatedInvoice) {
             return ['valid' => false, 'errors' => ['related_invoice_id' => ['Factura no encontrada']]];
+        }
+        
+        // Validar que la factura tenga receptor
+        if (!$relatedInvoice->client_id && !$relatedInvoice->receiver_company_id && !$relatedInvoice->receiver_name) {
+            return [
+                'valid' => false,
+                'errors' => [
+                    'related_invoice_id' => [
+                        'La factura seleccionada no tiene cliente o receptor. No se puede emitir NC/ND sobre facturas sin receptor.'
+                    ]
+                ]
+            ];
         }
         
         // Validar que sea una factura (no otra NC/ND)

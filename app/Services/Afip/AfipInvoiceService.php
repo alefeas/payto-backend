@@ -252,10 +252,23 @@ class AfipInvoiceService
      */
     private function buildInvoiceData(Invoice $invoice): array
     {
+        Log::info('Building invoice data for AFIP', [
+            'invoice_id' => $invoice->id,
+            'client_id' => $invoice->client_id,
+            'receiver_company_id' => $invoice->receiver_company_id,
+            'has_client_relation' => !is_null($invoice->client),
+            'has_receiverCompany_relation' => !is_null($invoice->receiverCompany),
+        ]);
+        
         // Obtener el receptor: puede ser un cliente externo o una empresa conectada
         $receptor = $invoice->client ?? $invoice->receiverCompany;
         
         if (!$receptor) {
+            Log::error('No receptor found for invoice', [
+                'invoice_id' => $invoice->id,
+                'client_id' => $invoice->client_id,
+                'receiver_company_id' => $invoice->receiver_company_id,
+            ]);
             throw new \Exception('La factura debe tener un cliente o empresa receptora');
         }
         
@@ -396,11 +409,11 @@ class AfipInvoiceService
         }
         $detRequest['Tributos'] = $this->buildTributosArray($invoice);
 
-        // Agregar comprobante asociado para NC/ND
+        // Agregar comprobante asociado para NC/ND (solo si tiene CAE)
         $category = \App\Services\VoucherTypeService::getCategory($invoice->type);
         if (in_array($category, ['credit_note', 'debit_note']) && $invoice->related_invoice_id) {
             $relatedInvoice = Invoice::find($invoice->related_invoice_id);
-            if ($relatedInvoice) {
+            if ($relatedInvoice && $relatedInvoice->afip_cae && $relatedInvoice->afip_status === 'approved') {
                 $detRequest['CbtesAsoc'] = [
                     'CbteAsoc' => [
                         'Tipo' => $this->getAfipInvoiceType($relatedInvoice->type),

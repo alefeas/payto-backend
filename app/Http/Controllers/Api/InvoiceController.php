@@ -38,8 +38,10 @@ class InvoiceController extends Controller
         $dateTo = $request->query('date_to');
         
         // Solo facturas emitidas por esta empresa O recibidas por esta empresa
-        $query = Invoice::where('issuer_company_id', $companyId)
-            ->orWhere('receiver_company_id', $companyId)
+        $query = Invoice::where(function($q) use ($companyId) {
+                $q->where('issuer_company_id', $companyId)
+                  ->orWhere('receiver_company_id', $companyId);
+            })
             ->with([
                 'client' => function($query) { $query->withTrashed(); },
                 'supplier' => function($query) { $query->withTrashed(); },
@@ -48,25 +50,86 @@ class InvoiceController extends Controller
 
         if ($status && $status !== 'all') {
             if ($status === 'overdue') {
+                // Vencidas: fecha vencida Y sin pagos/cobranzas Y no rechazadas
                 $query->whereDate('due_date', '<', now())
-                      ->whereNotIn('status', ['paid', 'collected', 'cancelled']);
-            } elseif ($status === 'collected') {
-                $query->where('issuer_company_id', $companyId)
-                      ->where('status', 'collected');
-            } elseif ($status === 'paid') {
-                $query->where('receiver_company_id', $companyId)
-                      ->where('status', 'paid');
-            } elseif (in_array($status, ['pending_approval', 'approved', 'rejected'])) {
-                // Para estados de aprobación, filtrar por company_statuses JSON
-                $query->where(function($q) use ($status, $companyId) {
-                    $q->whereRaw("JSON_EXTRACT(company_statuses, '$.\"{$companyId}\"') = ?", [$status])
-                      ->orWhere(function($q2) use ($status, $companyId) {
-                          // Fallback: si no existe en JSON, usar lógica anterior
-                          $q2->whereRaw("JSON_EXTRACT(company_statuses, '$.\"{$companyId}\"') IS NULL")
-                             ->where('receiver_company_id', $companyId)
-                             ->where('status', $status);
+                      ->whereNotIn('status', ['cancelled'])
+                      ->whereRaw("(company_statuses IS NULL OR JSON_SEARCH(company_statuses, 'one', 'rejected') IS NULL)")
+                      ->whereDoesntHave('collections', function($q) use ($companyId) {
+                          $q->where('company_id', $companyId)
+                            ->where('status', 'confirmed');
+                      })
+                      ->whereNotExists(function($q) use ($companyId) {
+                          $q->select(DB::raw(1))
+                            ->from('invoice_payments_tracking')
+                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
+                            ->where('invoice_payments_tracking.company_id', $companyId)
+                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
                       });
-                });
+            } elseif ($status === 'collected') {
+                // Facturas emitidas con collections confirmadas que cubren el total (excluir anuladas)
+                $query->where('issuer_company_id', $companyId)
+                      ->where('status', '!=', 'cancelled')
+                      ->whereHas('collections', function($q) use ($companyId) {
+                          $q->where('company_id', $companyId)
+                            ->where('status', 'confirmed');
+                      });
+            } elseif ($status === 'paid') {
+                // Facturas recibidas con payments confirmados que cubren el total (excluir anuladas)
+                $query->where('receiver_company_id', $companyId)
+                      ->where('status', '!=', 'cancelled')
+                      ->whereExists(function($q) use ($companyId) {
+                          $q->select(DB::raw(1))
+                            ->from('invoice_payments_tracking')
+                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
+                            ->where('invoice_payments_tracking.company_id', $companyId)
+                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
+                      });
+            } elseif ($status === 'approved') {
+                // Aprobadas: tienen 'approved' en company_statuses Y no están pagadas/cobradas
+                $query->whereRaw("JSON_SEARCH(company_statuses, 'one', 'approved') IS NOT NULL")
+                      ->whereRaw("JSON_SEARCH(company_statuses, 'one', 'paid') IS NULL")
+                      ->whereDoesntHave('collections', function($q) use ($companyId) {
+                          $q->where('company_id', $companyId)
+                            ->where('status', 'confirmed');
+                      })
+                      ->whereNotExists(function($q) use ($companyId) {
+                          $q->select(DB::raw(1))
+                            ->from('invoice_payments_tracking')
+                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
+                            ->where('invoice_payments_tracking.company_id', $companyId)
+                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
+                      });
+            } elseif ($status === 'rejected') {
+                // Buscar en company_statuses por cualquier clave que tenga 'rejected'
+                $query->whereRaw("JSON_SEARCH(company_statuses, 'one', 'rejected') IS NOT NULL");
+            } elseif ($status === 'pending_approval') {
+                $query->where('status', 'pending_approval')
+                      ->where(function($q) use ($companyId) {
+                          $q->whereNull('company_statuses')
+                            ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"')) = 'pending_approval'");
+                      });
+            } elseif ($status === 'issued') {
+                // Facturas emitidas sin pagos/cobranzas
+                $query->where('status', 'issued')
+                      ->whereDoesntHave('collections', function($q) use ($companyId) {
+                          $q->where('company_id', $companyId)
+                            ->where('status', 'confirmed');
+                      })
+                      ->whereNotExists(function($q) use ($companyId) {
+                          $q->select(DB::raw(1))
+                            ->from('invoice_payments_tracking')
+                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
+                            ->where('invoice_payments_tracking.company_id', $companyId)
+                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
+                      });
+            } elseif ($status === 'partially_cancelled') {
+                // Parcialmente anuladas: tienen NC/ND pero NO están totalmente cobradas/pagadas
+                // Usar balance_pending para determinar si aún hay saldo pendiente
+                $query->where('status', 'partially_cancelled')
+                      ->where(function($q) {
+                          $q->whereNull('balance_pending')
+                            ->orWhere('balance_pending', '>', 0);
+                      });
             } else {
                 $query->where('status', $status);
             }
@@ -118,7 +181,10 @@ class InvoiceController extends Controller
             $companyStatuses = $invoice->company_statuses ?: [];
             $companyIdInt = (int)$companyId;
             
-            if (isset($companyStatuses[$companyIdInt])) {
+            // Priorizar cancelled si la factura está anulada
+            if ($invoice->status === 'cancelled') {
+                $invoice->display_status = 'cancelled';
+            } elseif (isset($companyStatuses[$companyIdInt])) {
                 $invoice->display_status = $companyStatuses[$companyIdInt];
             } else {
                 // Fallback al status global
@@ -145,11 +211,32 @@ class InvoiceController extends Controller
                     ->sum('amount');
             }
             
-            $total = $invoice->total ?? 0;
-            $invoice->paid_amount = $paidAmount;
-            $invoice->pending_amount = $total - $paidAmount;
+            // Recalcular balance_pending considerando NC/ND
+            $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                ->where('status', '!=', 'cancelled')
+                ->sum('total');
             
-            if ($paidAmount >= $total) {
+            $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                ->where('status', '!=', 'cancelled')
+                ->sum('total');
+            
+            $total = $invoice->total ?? 0;
+            $adjustedTotal = $total + $totalND - $totalNC;
+            $invoice->paid_amount = $paidAmount;
+            $invoice->pending_amount = $adjustedTotal - $paidAmount;
+            $invoice->balance_pending = $invoice->pending_amount;
+            
+            // Facturas anuladas no tienen payment_status
+            if ($invoice->status === 'cancelled') {
+                $invoice->payment_status = 'cancelled';
+                Log::info('Setting payment_status to cancelled', [
+                    'invoice_number' => $invoice->number,
+                    'status' => $invoice->status,
+                    'display_status' => $invoice->display_status ?? 'not set yet',
+                ]);
+            } elseif ($paidAmount >= $adjustedTotal) {
                 $invoice->payment_status = 'paid';
             } elseif ($paidAmount > 0) {
                 $invoice->payment_status = 'partial';
@@ -1231,10 +1318,11 @@ class InvoiceController extends Controller
         $this->authorize('create', [Invoice::class, $company]);
         
         $validated = $request->validate([
-            'client_id' => 'nullable|exists:clients,id',
-            'receiver_company_id' => 'nullable|exists:companies,id',
-            'client_name' => 'required_without_all:client_id,receiver_company_id|string|max:200',
-            'client_document' => 'required_without_all:client_id,receiver_company_id|string|max:20',
+            'client_id' => 'required_without_all:receiver_company_id,client_name,related_invoice_id|exists:clients,id',
+            'receiver_company_id' => 'required_without_all:client_id,client_name,related_invoice_id|exists:companies,id',
+            'client_name' => 'required_without_all:client_id,receiver_company_id,related_invoice_id|string|max:200',
+            'client_document' => 'required_with:client_name|string|max:20',
+            'related_invoice_id' => 'nullable|exists:invoices,id',
             'invoice_type' => 'required|string',
             'invoice_number' => 'nullable|string|max:50',
             'number' => 'nullable|string|max:50',
@@ -1340,6 +1428,34 @@ class InvoiceController extends Controller
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
             
+            // Si es NC/ND con factura relacionada, heredar receptor
+            $clientId = null;
+            $receiverCompanyId = null;
+            $clientName = null;
+            $clientDocument = null;
+            
+            if (!empty($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::with(['client', 'receiverCompany'])->find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    $clientId = $relatedInvoice->client_id;
+                    $receiverCompanyId = $relatedInvoice->receiver_company_id;
+                    $clientName = $relatedInvoice->receiver_name;
+                    $clientDocument = $relatedInvoice->receiver_document;
+                    
+                    Log::info('Inherited client/receiver from related invoice', [
+                        'related_invoice_id' => $relatedInvoice->id,
+                        'client_id' => $clientId,
+                        'receiver_company_id' => $receiverCompanyId,
+                        'client_name' => $clientName,
+                    ]);
+                }
+            } else {
+                $clientId = $validated['client_id'] ?? null;
+                $receiverCompanyId = $validated['receiver_company_id'] ?? null;
+                $clientName = $validated['client_name'] ?? null;
+                $clientDocument = $validated['client_document'] ?? null;
+            }
+            
             // Check for duplicate invoice
             $existingInvoice = Invoice::where('issuer_company_id', $companyId)
                 ->where('type', $invoiceTypeInternal)
@@ -1362,8 +1478,9 @@ class InvoiceController extends Controller
                 'voucher_number' => $voucherNumber,
                 'concept' => 'products',
                 'issuer_company_id' => $companyId,
-                'receiver_company_id' => $validated['receiver_company_id'] ?? null,
-                'client_id' => $validated['client_id'] ?? null,
+                'receiver_company_id' => $receiverCompanyId,
+                'client_id' => $clientId,
+                'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
                 'subtotal' => $subtotal,
@@ -1375,8 +1492,8 @@ class InvoiceController extends Controller
                 'notes' => $validated['notes'] ?? null,
                 'status' => 'issued',
                 'afip_status' => 'approved',
-                'receiver_name' => $validated['client_name'] ?? null,
-                'receiver_document' => $validated['client_document'] ?? null,
+                'receiver_name' => $clientName,
+                'receiver_document' => $clientDocument,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
                 'is_manual_load' => true,
@@ -1402,6 +1519,11 @@ class InvoiceController extends Controller
                 ]);
             }
 
+            // Si es NC/ND, actualizar factura relacionada
+            if (isset($validated['related_invoice_id'])) {
+                $this->updateRelatedInvoiceBalance($validated['related_invoice_id']);
+            }
+            
             DB::commit();
 
             return response()->json([
@@ -1446,10 +1568,11 @@ class InvoiceController extends Controller
         }
 
         $validated = $request->validate([
-            'supplier_id' => 'nullable|exists:suppliers,id',
-            'issuer_company_id' => 'nullable|string',
-            'supplier_name' => 'required_without_all:issuer_company_id,supplier_id|string|max:200',
-            'supplier_document' => 'required_without_all:issuer_company_id,supplier_id|string|max:20',
+            'supplier_id' => 'required_without_all:issuer_company_id,supplier_name,related_invoice_id|exists:suppliers,id',
+            'issuer_company_id' => 'required_without_all:supplier_id,supplier_name,related_invoice_id|string',
+            'supplier_name' => 'required_without_all:issuer_company_id,supplier_id,related_invoice_id|string|max:200',
+            'supplier_document' => 'required_with:supplier_name|string|max:20',
+            'related_invoice_id' => 'nullable|exists:invoices,id',
             'invoice_type' => 'required|string',
             'invoice_number' => 'nullable|string|max:50',
             'number' => 'nullable|string|max:50',
@@ -1587,7 +1710,23 @@ class InvoiceController extends Controller
             $supplierId = null;
             $issuerCompanyId = null;
             
-            if (!empty($validated['supplier_id'])) {
+            // Si es NC/ND con factura relacionada, heredar emisor
+            if (!empty($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::with(['supplier', 'issuerCompany'])->find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    $supplierId = $relatedInvoice->supplier_id;
+                    $issuerCompanyId = $relatedInvoice->issuer_company_id;
+                    $supplierName = $relatedInvoice->issuer_name;
+                    $supplierDocument = $relatedInvoice->issuer_document;
+                    
+                    Log::info('Inherited supplier/issuer from related invoice', [
+                        'related_invoice_id' => $relatedInvoice->id,
+                        'supplier_id' => $supplierId,
+                        'issuer_company_id' => $issuerCompanyId,
+                        'supplier_name' => $supplierName,
+                    ]);
+                }
+            } elseif (!empty($validated['supplier_id'])) {
                 // Using existing supplier
                 $supplier = \App\Models\Supplier::findOrFail($validated['supplier_id']);
                 $supplierId = $supplier->id;
@@ -1611,8 +1750,43 @@ class InvoiceController extends Controller
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
             
+            // Check for duplicate: same receiver + supplier + type + number
+            $existingInvoice = Invoice::withTrashed()
+                ->where('receiver_company_id', $companyId)
+                ->where('type', $invoiceTypeInternal)
+                ->where('sales_point', $salesPoint)
+                ->where('voucher_number', $voucherNumber)
+                ->where(function($q) use ($supplierDocument, $issuerCompanyId) {
+                    if ($issuerCompanyId) {
+                        $q->where('issuer_company_id', $issuerCompanyId);
+                    } else {
+                        $q->where('issuer_document', $supplierDocument);
+                    }
+                })
+                ->first();
+                
+            if ($existingInvoice) {
+                DB::rollBack();
+                
+                $message = 'Ya existe una factura de este proveedor con el mismo tipo y número.';
+                if ($existingInvoice->trashed()) {
+                    $message .= ' La factura está eliminada.';
+                }
+                
+                return response()->json([
+                    'message' => $message,
+                    'existing_invoice' => [
+                        'id' => $existingInvoice->id,
+                        'number' => $existingInvoice->number,
+                        'status' => $existingInvoice->status,
+                        'deleted_at' => $existingInvoice->deleted_at,
+                    ]
+                ], 422);
+            }
+            
             // Create manual received invoice
-            $invoice = Invoice::create([
+            try {
+                $invoice = Invoice::create([
                 'number' => $invoiceNumber,
                 'type' => $invoiceTypeInternal,
                 'sales_point' => $salesPoint,
@@ -1621,6 +1795,7 @@ class InvoiceController extends Controller
                 'issuer_company_id' => $issuerCompanyId ?? $companyId, // Connected company or placeholder
                 'receiver_company_id' => $companyId, // Your company receives
                 'supplier_id' => $supplierId,
+                'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
                 'due_date' => $validated['due_date'],
                 'subtotal' => $subtotal,
@@ -1686,6 +1861,24 @@ class InvoiceController extends Controller
                 }
             }
 
+            // Si es NC/ND, actualizar factura relacionada
+            if (isset($validated['related_invoice_id'])) {
+                $this->updateRelatedInvoiceBalance($validated['related_invoice_id']);
+            }
+            
+            } catch (\Illuminate\Database\QueryException $e) {
+                DB::rollBack();
+                
+                if ($e->getCode() == 23000 || strpos($e->getMessage(), 'Duplicate entry') !== false) {
+                    return response()->json([
+                        'message' => 'Ya existe una factura con el mismo tipo, punto de venta y número',
+                        'error' => 'Factura duplicada. Verifique el tipo (' . $invoiceTypeInternal . '), punto de venta (' . $salesPoint . ') y número (' . $voucherNumber . ')'
+                    ], 422);
+                }
+                
+                throw $e;
+            }
+            
             DB::commit();
 
             return response()->json([
@@ -2258,5 +2451,76 @@ class InvoiceController extends Controller
         
         // Return as-is if not a valid 11-digit CUIT
         return $cuit;
+    }
+    
+    /**
+     * Update related invoice balance when a NC/ND is created
+     */
+    private function updateRelatedInvoiceBalance(string $relatedInvoiceId): void
+    {
+        $relatedInvoice = Invoice::find($relatedInvoiceId);
+        if (!$relatedInvoice) {
+            return;
+        }
+        
+        // RECALCULAR SALDO COMPLETO: Total + ND - NC - Collections/Payments
+        $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Cobros/Pagos confirmados
+        $totalCollections = $relatedInvoice->collections()
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        $totalPayments = \DB::table('invoice_payments_tracking')
+            ->where('invoice_id', $relatedInvoice->id)
+            ->whereIn('status', ['confirmed', 'in_process'])
+            ->sum('amount');
+        
+        // Saldo = Total + ND - NC - Cobros - Pagos
+        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC - $totalCollections - $totalPayments;
+        
+        // Redondear para evitar problemas de precisión
+        $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
+        
+        Log::info('Recalculated invoice balance (manual load)', [
+            'invoice_id' => $relatedInvoice->id,
+            'invoice_number' => $relatedInvoice->number,
+            'total' => $relatedInvoice->total,
+            'total_nc' => $totalNC,
+            'total_nd' => $totalND,
+            'total_collections' => $totalCollections,
+            'total_payments' => $totalPayments,
+            'balance_pending' => $relatedInvoice->balance_pending,
+        ]);
+        
+        // Actualizar estado según el saldo
+        if ($relatedInvoice->balance_pending < 0.01) { // Solo anular si saldo < $0.01
+            $relatedInvoice->status = 'cancelled';
+            $relatedInvoice->balance_pending = 0;
+            
+            Log::info('Invoice automatically cancelled by manual NC/ND', [
+                'invoice_id' => $relatedInvoice->id,
+                'invoice_number' => $relatedInvoice->number,
+            ]);
+        } else if ($relatedInvoice->balance_pending < $relatedInvoice->total) {
+            // Anulación parcial
+            $relatedInvoice->status = 'partially_cancelled';
+            
+            Log::info('Invoice partially cancelled by manual NC/ND', [
+                'invoice_id' => $relatedInvoice->id,
+                'invoice_number' => $relatedInvoice->number,
+                'new_balance' => $relatedInvoice->balance_pending,
+            ]);
+        }
+        
+        $relatedInvoice->save();
     }
 }

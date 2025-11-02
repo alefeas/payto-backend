@@ -39,6 +39,112 @@ class VoucherController extends Controller
     }
 
     /**
+     * Get compatible invoices for manual ISSUED NC/ND (facturas que YO emití)
+     */
+    public function getCompatibleInvoicesForIssued($companyId, Request $request)
+    {
+        $voucherType = $request->query('voucher_type');
+        
+        // Determinar letra según tipo de NC/ND
+        $invoiceType = null;
+        if (in_array($voucherType, ['003', '002'])) $invoiceType = 'A'; // NCA, NDA
+        elseif (in_array($voucherType, ['008', '007'])) $invoiceType = 'B'; // NCB, NDB
+        elseif (in_array($voucherType, ['013', '012'])) $invoiceType = 'C'; // NCC, NDC
+        elseif (in_array($voucherType, ['053', '052'])) $invoiceType = 'M'; // NCM, NDM
+        
+        $query = Invoice::where('issuer_company_id', $companyId)
+            ->whereNotIn('status', ['cancelled'])
+            ->where(function($q) {
+                $q->whereNull('balance_pending')
+                  ->orWhere('balance_pending', '>', 0);
+            });
+        
+        if ($invoiceType) {
+            $query->where('type', $invoiceType);
+        }
+        
+        $invoices = $query->with(['client' => function($query) { $query->withTrashed(); }, 'receiverCompany'])
+            ->orderBy('issue_date', 'desc')
+            ->get()
+            ->map(function($invoice) {
+                $clientName = $invoice->receiver_name 
+                    ?? $invoice->receiverCompany?->name 
+                    ?? $invoice->client?->business_name 
+                    ?? ($invoice->client ? trim($invoice->client->first_name . ' ' . $invoice->client->last_name) : null)
+                    ?? 'Sin cliente';
+                
+                return [
+                    'id' => $invoice->id,
+                    'invoice_number' => $invoice->number,
+                    'invoice_type' => $invoice->type,
+                    'sales_point' => $invoice->sales_point,
+                    'issue_date' => $invoice->issue_date->format('Y-m-d'),
+                    'client_name' => $clientName,
+                    'total_amount' => $invoice->total,
+                    'available_balance' => $invoice->balance_pending ?? $invoice->total,
+                    'concept' => $invoice->concept ?? 'products',
+                    'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
+                    'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                ];
+            });
+        
+        return response()->json(['invoices' => $invoices]);
+    }
+    
+    /**
+     * Get compatible invoices for manual RECEIVED NC/ND (facturas que YO recibí)
+     */
+    public function getCompatibleInvoicesForReceived($companyId, Request $request)
+    {
+        $voucherType = $request->query('voucher_type');
+        
+        // Determinar letra según tipo de NC/ND
+        $invoiceType = null;
+        if (in_array($voucherType, ['003', '002'])) $invoiceType = 'A'; // NCA, NDA
+        elseif (in_array($voucherType, ['008', '007'])) $invoiceType = 'B'; // NCB, NDB
+        elseif (in_array($voucherType, ['013', '012'])) $invoiceType = 'C'; // NCC, NDC
+        elseif (in_array($voucherType, ['053', '052'])) $invoiceType = 'M'; // NCM, NDM
+        
+        $query = Invoice::where('receiver_company_id', $companyId)
+            ->whereNotIn('status', ['cancelled'])
+            ->where(function($q) {
+                $q->whereNull('balance_pending')
+                  ->orWhere('balance_pending', '>', 0);
+            });
+        
+        if ($invoiceType) {
+            $query->where('type', $invoiceType);
+        }
+        
+        $invoices = $query->with(['supplier' => function($query) { $query->withTrashed(); }, 'issuerCompany'])
+            ->orderBy('issue_date', 'desc')
+            ->get()
+            ->map(function($invoice) {
+                $supplierName = $invoice->issuer_name
+                    ?? $invoice->issuerCompany?->name 
+                    ?? $invoice->supplier?->business_name 
+                    ?? ($invoice->supplier ? trim($invoice->supplier->first_name . ' ' . $invoice->supplier->last_name) : null)
+                    ?? 'Sin proveedor';
+                
+                return [
+                    'id' => $invoice->id,
+                    'invoice_number' => $invoice->number,
+                    'invoice_type' => $invoice->type,
+                    'sales_point' => $invoice->sales_point,
+                    'issue_date' => $invoice->issue_date->format('Y-m-d'),
+                    'client_name' => $supplierName,
+                    'total_amount' => $invoice->total,
+                    'available_balance' => $invoice->balance_pending ?? $invoice->total,
+                    'concept' => $invoice->concept ?? 'products',
+                    'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
+                    'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                ];
+            });
+        
+        return response()->json(['invoices' => $invoices]);
+    }
+
+    /**
      * Get available balance for invoice (for NC/ND)
      */
     public function getInvoiceBalance($companyId, $invoiceId)
@@ -87,26 +193,59 @@ class VoucherController extends Controller
             return response()->json(['invoices' => []]);
         }
         
-        // Buscar facturas compatibles con saldo disponible (excluir anuladas)
+        // Buscar facturas compatibles (excluir solo anuladas totalmente)
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->whereIn('type', $compatibleWith)
-            ->whereIn('status', ['issued', 'approved', 'partially_cancelled']) // Excluir 'cancelled'
+            ->whereNotIn('status', ['cancelled'])
             ->where(function($query) {
                 $query->whereNull('balance_pending')
-                      ->orWhere('balance_pending', '>', 0); // Solo con saldo disponible
+                      ->orWhere('balance_pending', '>', 0);
             })
-            ->with(['client', 'receiverCompany'])
+            ->where(function($query) {
+                $query->whereNotNull('client_id')
+                      ->orWhereNotNull('receiver_company_id')
+                      ->orWhereNotNull('receiver_name');
+            })
+            ->with([
+                'client' => function($query) { $query->withTrashed(); },
+                'receiverCompany'
+            ])
             ->orderBy('issue_date', 'desc')
             ->get()
-            ->map(function($invoice) {
+            ->map(function($invoice) use ($companyId) {
+                Log::info('Processing invoice for selector', [
+                    'invoice_id' => $invoice->id,
+                    'invoice_number' => $invoice->number,
+                    'has_client' => !is_null($invoice->client),
+                    'client_id' => $invoice->client_id,
+                    'has_receiverCompany' => !is_null($invoice->receiverCompany),
+                    'receiver_company_id' => $invoice->receiver_company_id,
+                    'receiver_name' => $invoice->receiver_name,
+                    'receiver_cuit' => $invoice->receiver_cuit
+                ]);
+                // Determinar nombre según dirección
                 $clientName = 'Sin cliente';
-                if ($invoice->client) {
-                    $clientName = $invoice->client->business_name ?? "{$invoice->client->first_name} {$invoice->client->last_name}";
-                } elseif ($invoice->receiverCompany) {
-                    $clientName = $invoice->receiverCompany->name;
+                if ($invoice->issuer_company_id == $companyId) {
+                    // Factura emitida: mostrar receptor
+                    if ($invoice->client) {
+                        $clientName = $invoice->client->business_name ?? "{$invoice->client->first_name} {$invoice->client->last_name}";
+                    } elseif ($invoice->receiverCompany) {
+                        $clientName = $invoice->receiverCompany->name;
+                    } elseif ($invoice->receiver_name) {
+                        $clientName = $invoice->receiver_name;
+                    }
+                } else {
+                    // Factura recibida: mostrar emisor
+                    if ($invoice->supplier) {
+                        $clientName = $invoice->supplier->business_name ?? "{$invoice->supplier->first_name} {$invoice->supplier->last_name}";
+                    } elseif ($invoice->issuerCompany) {
+                        $clientName = $invoice->issuerCompany->name;
+                    } elseif ($invoice->issuer_name) {
+                        $clientName = $invoice->issuer_name;
+                    }
                 }
                 
-                return [
+                $result = [
                     'id' => $invoice->id,
                     'invoice_number' => $invoice->number,
                     'invoice_type' => $invoice->type,
@@ -118,7 +257,17 @@ class VoucherController extends Controller
                     'concept' => $invoice->concept ?? 'products',
                     'service_date_from' => $invoice->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $invoice->service_date_to?->format('Y-m-d'),
+                    'client_id' => $invoice->client_id,
+                    'receiver_company_id' => $invoice->receiver_company_id,
+                    'receiver_name' => $invoice->receiver_name,
+                    'receiver_cuit' => $invoice->receiver_cuit,
+                    'receiver_address' => $invoice->receiver_address,
+                    'receiver_tax_condition' => $invoice->receiver_tax_condition,
                 ];
+                
+                Log::info('Invoice mapped for selector', $result);
+                
+                return $result;
             });
         
         return response()->json(['invoices' => $invoices]);
@@ -151,11 +300,29 @@ class VoucherController extends Controller
             ], 422);
         }
         
+        // Log request data for debugging
+        Log::info('Voucher creation request', [
+            'company_id' => $companyId,
+            'voucher_type' => $voucherType,
+            'voucher_type_code' => $voucherTypeCode,
+            'has_related_invoice' => isset($request->all()['related_invoice_id']),
+            'sales_point' => $request->input('sales_point'),
+            'data' => $request->all()
+        ]);
+        
         // Validar
         $validation = $this->validationService->validateVoucher($request->all(), $voucherType);
         if (!$validation['valid']) {
+            Log::warning('Voucher validation failed', [
+                'company_id' => $companyId,
+                'voucher_type' => $voucherType,
+                'errors' => $validation['errors'],
+                'data' => $request->all()
+            ]);
+            
             return response()->json([
-                'message' => 'Validation failed',
+                'message' => 'Error de validación',
+                'error' => 'Los datos del comprobante no son válidos. Revise los campos requeridos.',
                 'errors' => $validation['errors']
             ], 422);
         }
@@ -174,7 +341,8 @@ class VoucherController extends Controller
             // Solicitar CAE a AFIP
             if ($company->afipCertificate && $company->afipCertificate->is_active) {
                 try {
-                    $voucher->load('perceptions');
+                    // Cargar relaciones necesarias para AFIP
+                    $voucher->load(['perceptions', 'client' => function($query) { $query->withTrashed(); }, 'receiverCompany', 'supplier' => function($query) { $query->withTrashed(); }, 'issuerCompany']);
                     $afipService = new AfipInvoiceService($company);
                     $afipResult = $afipService->authorizeInvoice($voucher);
                     
@@ -270,35 +438,96 @@ class VoucherController extends Controller
         
         $total = $subtotal + $totalTaxes + $totalPerceptions;
         
-        // Si tiene factura relacionada, obtener client_id y moneda de ella
-        $clientId = $data['client_id'] ?? null;
-        $receiverCompanyId = null;
-        $currency = $data['currency'] ?? 'ARS';
-        $exchangeRate = $data['exchange_rate'] ?? 1;
-        
+        // Si tiene factura relacionada, SIEMPRE heredar receptor y moneda
         if (isset($data['related_invoice_id'])) {
-            $relatedInvoice = Invoice::find($data['related_invoice_id']);
-            if ($relatedInvoice) {
-                $clientId = $relatedInvoice->client_id;
-                $receiverCompanyId = $relatedInvoice->receiver_company_id;
-                $currency = $relatedInvoice->currency; // Tomar moneda de la factura
-                $exchangeRate = $relatedInvoice->exchange_rate; // Tomar tipo de cambio
+            $relatedInvoice = Invoice::with(['client', 'receiverCompany'])->find($data['related_invoice_id']);
+            if (!$relatedInvoice) {
+                throw new \Exception('Factura relacionada no encontrada');
             }
+            
+            Log::info('Inheriting receptor from related invoice', [
+                'related_invoice_id' => $relatedInvoice->id,
+                'related_invoice_number' => $relatedInvoice->number,
+                'client_id' => $relatedInvoice->client_id,
+                'receiver_company_id' => $relatedInvoice->receiver_company_id,
+                'receiver_name' => $relatedInvoice->receiver_name,
+                'supplier_id' => $relatedInvoice->supplier_id,
+                'issuer_company_id' => $relatedInvoice->issuer_company_id,
+            ]);
+            
+            // Heredar TODOS los campos de receptor (emitidas y recibidas)
+            $clientId = $relatedInvoice->client_id;
+            $receiverCompanyId = $relatedInvoice->receiver_company_id;
+            $receiverName = $relatedInvoice->receiver_name;
+            $receiverCuit = $relatedInvoice->receiver_cuit;
+            $receiverAddress = $relatedInvoice->receiver_address;
+            $receiverTaxCondition = $relatedInvoice->receiver_tax_condition;
+            
+            // Para facturas recibidas, heredar supplier e issuer
+            $supplierId = $relatedInvoice->supplier_id;
+            $issuerCompanyId = $relatedInvoice->issuer_company_id;
+            $issuerName = $relatedInvoice->issuer_name;
+            $issuerCuit = $relatedInvoice->issuer_cuit;
+            $issuerAddress = $relatedInvoice->issuer_address;
+            $issuerTaxCondition = $relatedInvoice->issuer_tax_condition;
+            
+            $currency = $relatedInvoice->currency;
+            $exchangeRate = $relatedInvoice->exchange_rate;
+            
+            // Validar que tenga al menos un receptor O emisor
+            if (!$clientId && !$receiverCompanyId && !$receiverName && !$supplierId && !$issuerCompanyId && !$issuerName) {
+                throw new \Exception('La factura original no tiene datos del receptor/emisor. No se puede emitir NC/ND sobre facturas sin cliente/proveedor.');
+            }
+        } else {
+            // Sin factura relacionada, usar datos del request
+            $clientId = $data['client_id'] ?? null;
+            $receiverCompanyId = null;
+            $receiverName = null;
+            $receiverCuit = null;
+            $receiverAddress = null;
+            $receiverTaxCondition = null;
+            $supplierId = null;
+            $issuerCompanyId = null;
+            $issuerName = null;
+            $issuerCuit = null;
+            $issuerAddress = null;
+            $issuerTaxCondition = null;
+            $currency = $data['currency'] ?? 'ARS';
+            $exchangeRate = $data['exchange_rate'] ?? 1;
         }
         
         // Crear comprobante
+        Log::info('Creating voucher with receptor data', [
+            'client_id' => $clientId,
+            'receiver_company_id' => $receiverCompanyId,
+            'receiver_name' => $receiverName,
+            'supplier_id' => $supplierId ?? null,
+            'issuer_company_id_inherited' => $issuerCompanyId ?? null,
+        ]);
+        
         $voucher = Invoice::create([
             'number' => sprintf('%04d-%08d', $data['sales_point'], $voucherNumber),
             'type' => $type,
             'sales_point' => $data['sales_point'],
             'voucher_number' => $voucherNumber,
-            'concept' => 'products',
+            'concept' => $data['concept'] ?? 'products',
             'issuer_company_id' => $company->id,
             'client_id' => $clientId,
             'receiver_company_id' => $receiverCompanyId,
+            'receiver_name' => $receiverName,
+            'receiver_cuit' => $receiverCuit,
+            'receiver_address' => $receiverAddress,
+            'receiver_tax_condition' => $receiverTaxCondition,
+            'supplier_id' => $supplierId ?? null,
+            'issuer_name' => $issuerName ?? null,
+            'issuer_cuit' => $issuerCuit ?? null,
+            'issuer_address' => $issuerAddress ?? null,
+            'issuer_tax_condition' => $issuerTaxCondition ?? null,
             'related_invoice_id' => $data['related_invoice_id'] ?? null,
             'issue_date' => $data['issue_date'],
             'due_date' => $data['due_date'] ?? now()->addDays(30),
+            'service_date_from' => $data['service_date_from'] ?? null,
+            'service_date_to' => $data['service_date_to'] ?? null,
             'subtotal' => $subtotal,
             'total_taxes' => $totalTaxes,
             'total_perceptions' => $totalPerceptions,
@@ -311,7 +540,7 @@ class VoucherController extends Controller
             'approvals_required' => 0,
             'approvals_received' => 0,
             'created_by' => auth()->id(),
-            'balance_pending' => $total, // Inicializar saldo
+            'balance_pending' => $total,
         ]);
         
         // Crear items
@@ -358,23 +587,46 @@ class VoucherController extends Controller
             return;
         }
         
-        // Calcular saldo actual si no existe
-        if ($relatedInvoice->balance_pending === null) {
-            $relatedInvoice->balance_pending = $relatedInvoice->total;
-        }
+        // RECALCULAR SALDO COMPLETO: Total + ND - NC - Collections/Payments
+        $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
         
-        // Actualizar saldo según tipo de nota
-        if ($category === 'credit_note') {
-            $relatedInvoice->balance_pending -= $voucher->total;
-        } else if ($category === 'debit_note') {
-            $relatedInvoice->balance_pending += $voucher->total;
-        }
+        $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Cobros/Pagos confirmados
+        $totalCollections = $relatedInvoice->collections()
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        $totalPayments = \DB::table('invoice_payments_tracking')
+            ->where('invoice_id', $relatedInvoice->id)
+            ->whereIn('status', ['confirmed', 'in_process'])
+            ->sum('amount');
+        
+        // Saldo = Total + ND - NC - Cobros - Pagos
+        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC - $totalCollections - $totalPayments;
         
         // Redondear para evitar problemas de precisión
         $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
         
+        Log::info('Recalculated invoice balance', [
+            'invoice_id' => $relatedInvoice->id,
+            'invoice_number' => $relatedInvoice->number,
+            'total' => $relatedInvoice->total,
+            'total_nc' => $totalNC,
+            'total_nd' => $totalND,
+            'total_collections' => $totalCollections,
+            'total_payments' => $totalPayments,
+            'balance_pending' => $relatedInvoice->balance_pending,
+        ]);
+        
         // Actualizar estado según el saldo
-        if ($relatedInvoice->balance_pending <= 0.01) { // Tolerancia de 1 centavo
+        if ($relatedInvoice->balance_pending < 0.01) { // Solo anular si saldo < $0.01
             $relatedInvoice->status = 'cancelled';
             $relatedInvoice->balance_pending = 0;
             

@@ -277,9 +277,31 @@
     </div>
     @endif
 
-    @if($company->bankAccounts && $company->bankAccounts->count() > 0)
     @php
-        $primaryAccount = $company->bankAccounts->where('is_primary', true)->first() ?? $company->bankAccounts->first();
+        // Solo mostrar datos bancarios en facturas de venta (no en NC/ND)
+        $isInvoice = !in_array($invoice->type, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+        
+        // Determinar de quién mostrar los datos bancarios
+        $bankAccountsOwner = null;
+        $bankAccounts = null;
+        
+        if ($isInvoice) {
+            // Para facturas emitidas, mostrar datos del emisor (company)
+            // Para facturas recibidas, mostrar datos del proveedor (supplier/issuerCompany)
+            if ($invoice->is_manual_load && $invoice->supplier) {
+                // Factura recibida: mostrar datos del proveedor si tiene
+                $bankAccountsOwner = $invoice->supplier;
+                $bankAccounts = $invoice->supplier->bankAccounts ?? null;
+            } elseif ($company && $company->bankAccounts) {
+                // Factura emitida: mostrar datos del emisor
+                $bankAccountsOwner = $company;
+                $bankAccounts = $company->bankAccounts;
+            }
+        }
+    @endphp
+    @if($bankAccounts && $bankAccounts->count() > 0)
+    @php
+        $primaryAccount = $bankAccounts->where('is_primary', true)->first() ?? $bankAccounts->first();
     @endphp
     <div class="payment-info">
         <h4 style="margin: 0 0 5px 0; font-size: 10px;">Datos para Transferencia Bancaria:</h4>
@@ -288,7 +310,7 @@
         @if($primaryAccount->alias)
         <p style="margin: 2px 0;"><strong>Alias:</strong> {{ $primaryAccount->alias }}</p>
         @endif
-        <p style="margin: 2px 0;"><strong>Titular:</strong> {{ $company->business_name ?? $company->name }}</p>
+        <p style="margin: 2px 0;"><strong>Titular:</strong> {{ $bankAccountsOwner->business_name ?? $bankAccountsOwner->name ?? ($bankAccountsOwner->first_name && $bankAccountsOwner->last_name ? $bankAccountsOwner->first_name . ' ' . $bankAccountsOwner->last_name : 'No especificado') }}</p>
     </div>
     @endif
 

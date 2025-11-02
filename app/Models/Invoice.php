@@ -198,6 +198,12 @@ class Invoice extends Model
 
     public function getPendingAmountAttribute(): float
     {
+        // Si balance_pending está calculado, usarlo
+        if ($this->balance_pending !== null) {
+            return (float) $this->balance_pending;
+        }
+        
+        // Sino, calcular dinámicamente
         return $this->getRemainingAmountAttribute();
     }
 

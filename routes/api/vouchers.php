@@ -10,6 +10,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         
         // Compatible invoices for NC/ND
         Route::get('/vouchers/compatible-invoices', [VoucherController::class, 'getCompatibleInvoices']);
+        Route::get('/vouchers/compatible-invoices-issued', [VoucherController::class, 'getCompatibleInvoicesForIssued']);
+        Route::get('/vouchers/compatible-invoices-received', [VoucherController::class, 'getCompatibleInvoicesForReceived']);
         
         // Invoice balance
         Route::get('/invoices/{invoiceId}/available-balance', [VoucherController::class, 'getInvoiceBalance']);

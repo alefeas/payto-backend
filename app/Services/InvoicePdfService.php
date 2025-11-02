@@ -22,7 +22,7 @@ class InvoicePdfService
             // Load relationships conditionally
             $with = [
                 'client' => function($query) { $query->withTrashed(); },
-                'supplier' => function($query) { $query->withTrashed(); },
+                'supplier.bankAccounts' => function($query) { $query->withTrashed(); },
                 'items', 
                 'perceptions'
             ];
