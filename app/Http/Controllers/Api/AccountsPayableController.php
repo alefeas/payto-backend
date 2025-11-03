@@ -22,6 +22,7 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
+                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
                 ->with(['issuerCompany', 'supplier.company', 'payments']);
             
             if ($requiredApprovals > 0) {
@@ -30,16 +31,39 @@ class AccountsPayableController extends Controller
             
             $allInvoices = $query->get();
         
-            // Calcular paid_amount desde payments
+            // Calcular paid_amount desde payments y considerar NC/ND relacionadas
             $allInvoices->each(function($invoice) {
                 $invoice->paid_amount = $invoice->payments->sum('amount');
-                $invoice->pending_amount = $invoice->total - $invoice->paid_amount;
+                
+                // Calcular total ajustado considerando NC/ND relacionadas
+                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                
+                $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                
+                $adjustedTotal = ($invoice->total ?? 0) + $totalND - $totalNC;
+                $invoice->pending_amount = max(0, $adjustedTotal - $invoice->paid_amount);
             });
         
-            // Métricas principales
-            $totalPayable = $allInvoices->sum('total');
+            // Métricas principales - usar pending_amount que ya considera NC/ND
+            $totalPayable = $allInvoices->sum(function($inv) {
+                $totalNC = Invoice::where('related_invoice_id', $inv->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                $totalND = Invoice::where('related_invoice_id', $inv->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                return ($inv->total ?? 0) + $totalND - $totalNC;
+            });
             $totalPaid = $allInvoices->sum('paid_amount');
-            $totalPending = $totalPayable - $totalPaid;
+            $totalPending = $allInvoices->sum('pending_amount');
             
             // Facturas vencidas
             $overdue = $allInvoices
@@ -204,7 +228,15 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->with(['issuerCompany', 'supplier.company', 'payments']);
+                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
+                ->with([
+                    'issuerCompany.primaryBankAccount',
+                    'issuerCompany.bankAccounts',
+                    'supplier.company',
+                    'payments',
+                    'creditNotes',
+                    'debitNotes'
+                ]);
         
             // Filtros
             if ($request->has('supplier_id')) {
@@ -241,11 +273,25 @@ class AccountsPayableController extends Controller
             $invoices = $query->orderByDesc('issue_date')->get();
             
             // Calcular payment_status y pending_amount dinámicamente
+            // Considerando NC/ND relacionadas que afectan el monto a pagar
             $invoices->each(function($invoice) use ($companyId) {
                 $paidAmount = $invoice->payments->sum('amount');
-                $total = $invoice->total ?? 0;
                 
-                if ($paidAmount >= $total) {
+                // Calcular total ajustado considerando NC/ND relacionadas
+                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                
+                $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->sum('total');
+                
+                $baseTotal = $invoice->total ?? 0;
+                $adjustedTotal = $baseTotal + $totalND - $totalNC; // ND suma, NC resta
+                
+                if ($paidAmount >= $adjustedTotal) {
                     $invoice->payment_status = 'paid';
                 } elseif ($paidAmount > 0) {
                     $invoice->payment_status = 'partial';
@@ -254,7 +300,7 @@ class AccountsPayableController extends Controller
                 }
                 
                 $invoice->paid_amount = $paidAmount;
-                $invoice->pending_amount = $total - $paidAmount;
+                $invoice->pending_amount = max(0, $adjustedTotal - $paidAmount); // No negativo
                 
                 // Add bank data availability flag
                 $hasBankData = false;
@@ -262,8 +308,13 @@ class AccountsPayableController extends Controller
                     $hasBankData = (!empty($invoice->supplier->bank_cbu) && strlen($invoice->supplier->bank_cbu) >= 22) || 
                                    !empty($invoice->supplier->bank_account_number);
                 } elseif ($invoice->issuerCompany) {
-                    $hasBankData = (!empty($invoice->issuerCompany->bank_cbu) && strlen($invoice->issuerCompany->bank_cbu) >= 22) || 
-                                   !empty($invoice->issuerCompany->bank_account_number);
+                    // Check primary bank account or any bank account
+                    $primaryBankAccount = $invoice->issuerCompany->primaryBankAccount ?? $invoice->issuerCompany->bankAccounts->first();
+                    if ($primaryBankAccount) {
+                        $hasBankData = (!empty($primaryBankAccount->cbu) && strlen($primaryBankAccount->cbu) >= 22);
+                    } elseif (!empty($invoice->issuerCompany->cbu) && strlen($invoice->issuerCompany->cbu) >= 22) {
+                        $hasBankData = true;
+                    }
                 }
                 $invoice->has_bank_data = $hasBankData;
             });
@@ -305,13 +356,22 @@ class AccountsPayableController extends Controller
                         'bank_alias' => $invoice->supplier->bank_alias,
                     ];
                 }
-                // Explicitly include issuerCompany data if exists
+                // Explicitly include issuerCompany data if exists (with bank data)
                 if ($invoice->issuerCompany) {
+                    $primaryBankAccount = $invoice->issuerCompany->primaryBankAccount ?? $invoice->issuerCompany->bankAccounts->first();
+                    
                     $data['issuerCompany'] = [
                         'id' => $invoice->issuerCompany->id,
                         'business_name' => $invoice->issuerCompany->business_name,
                         'name' => $invoice->issuerCompany->name,
                         'national_id' => $invoice->issuerCompany->national_id,
+                        'cbu' => $invoice->issuerCompany->cbu, // Legacy field
+                        // Bank account data (use primary or first)
+                        'bank_name' => $primaryBankAccount->bank_name ?? null,
+                        'bank_cbu' => $primaryBankAccount->cbu ?? $invoice->issuerCompany->cbu ?? null,
+                        'bank_account_type' => $primaryBankAccount->account_type ?? null,
+                        'bank_alias' => $primaryBankAccount->alias ?? null,
+                        'bank_account_number' => null, // Not stored in BankAccount model
                     ];
                 }
                 return $data;
@@ -418,7 +478,7 @@ class AccountsPayableController extends Controller
         $company = Company::findOrFail($companyId);
         
         $invoices = Invoice::whereIn('id', $validated['invoice_ids'])
-            ->with(['supplier', 'issuerCompany', 'payments'])
+            ->with(['supplier', 'issuerCompany.primaryBankAccount', 'issuerCompany.bankAccounts', 'payments'])
             ->get();
         
         $lines = [];
@@ -430,9 +490,23 @@ class AccountsPayableController extends Controller
             
             if (!$supplier) continue;
             
-            // Get bank data
-            $cbu = $supplier->bank_cbu ?? '';
-            $accountNumber = $supplier->bank_account_number ?? '';
+            // Get bank data (for connected companies, check primaryBankAccount)
+            $cbu = '';
+            $accountNumber = '';
+            
+            if ($invoice->supplier) {
+                $cbu = $invoice->supplier->bank_cbu ?? '';
+                $accountNumber = $invoice->supplier->bank_account_number ?? '';
+            } elseif ($invoice->issuerCompany) {
+                $primaryBankAccount = $invoice->issuerCompany->primaryBankAccount ?? $invoice->issuerCompany->bankAccounts->first();
+                if ($primaryBankAccount) {
+                    $cbu = $primaryBankAccount->cbu ?? '';
+                }
+                if (empty($cbu)) {
+                    $cbu = $invoice->issuerCompany->cbu ?? '';
+                }
+            }
+            
             $cuit = $supplier->document_number ?? $supplier->national_id ?? '';
             $name = $supplier->business_name ?? ($supplier->first_name && $supplier->last_name ? $supplier->first_name . ' ' . $supplier->last_name : $supplier->name ?? '');
             
@@ -492,5 +566,110 @@ class AccountsPayableController extends Controller
         $text = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
         $text = preg_replace('/[^A-Za-z0-9 \-\.\,]/', '', $text);
         return strtoupper(trim($text));
+    }
+
+    /**
+     * Get balances including unassociated NC/ND
+     */
+    public function getBalances(string $companyId)
+    {
+        try {
+            $company = Company::findOrFail($companyId);
+            
+            // NC/ND sin factura asociada (solo recibidas de proveedores)
+            // Estas son saldos pendientes que deben manejarse independientemente
+            $unassociatedCreditNotes = Invoice::where('receiver_company_id', $companyId)
+                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                ->whereNull('related_invoice_id')
+                ->where('status', '!=', 'cancelled')
+                ->with(['issuerCompany', 'supplier.company'])
+                ->get()
+                ->map(function($nc) {
+                    $supplierName = null;
+                    if ($nc->supplier) {
+                        $supplierName = $nc->supplier->business_name 
+                            ?? ($nc->supplier->first_name && $nc->supplier->last_name 
+                                ? trim($nc->supplier->first_name . ' ' . $nc->supplier->last_name) 
+                                : null);
+                    }
+                    if (!$supplierName && $nc->issuerCompany) {
+                        $supplierName = $nc->issuerCompany->business_name ?? $nc->issuerCompany->name;
+                    }
+                    
+                    return [
+                        'id' => $nc->id,
+                        'type' => $nc->type,
+                        'number' => $nc->number,
+                        'voucher_number' => ($nc->type ?? 'NC') . ' ' . str_pad($nc->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($nc->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
+                        'issue_date' => $nc->issue_date,
+                        'due_date' => $nc->due_date,
+                        'supplier_name' => $supplierName ?? 'Sin nombre',
+                        'total' => $nc->total,
+                        'balance_type' => 'credit', // A favor nuestro (reduce lo que debemos pagar)
+                        'description' => 'Nota de Crédito sin factura asociada',
+                    ];
+                });
+            
+            $unassociatedDebitNotes = Invoice::where('receiver_company_id', $companyId)
+                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                ->whereNull('related_invoice_id')
+                ->where('status', '!=', 'cancelled')
+                ->with(['issuerCompany', 'supplier.company'])
+                ->get()
+                ->map(function($nd) {
+                    $supplierName = null;
+                    if ($nd->supplier) {
+                        $supplierName = $nd->supplier->business_name 
+                            ?? ($nd->supplier->first_name && $nd->supplier->last_name 
+                                ? trim($nd->supplier->first_name . ' ' . $nd->supplier->last_name) 
+                                : null);
+                    }
+                    if (!$supplierName && $nd->issuerCompany) {
+                        $supplierName = $nd->issuerCompany->business_name ?? $nd->issuerCompany->name;
+                    }
+                    
+                    return [
+                        'id' => $nd->id,
+                        'type' => $nd->type,
+                        'number' => $nd->number,
+                        'voucher_number' => ($nd->type ?? 'ND') . ' ' . str_pad($nd->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($nd->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
+                        'issue_date' => $nd->issue_date,
+                        'due_date' => $nd->due_date,
+                        'supplier_name' => $supplierName ?? 'Sin nombre',
+                        'total' => $nd->total,
+                        'balance_type' => 'debit', // En contra nuestro (aumenta lo que debemos pagar)
+                        'description' => 'Nota de Débito sin factura asociada',
+                    ];
+                });
+            
+            // Calcular totales
+            $totalCredits = $unassociatedCreditNotes->sum('total');
+            $totalDebits = $unassociatedDebitNotes->sum('total');
+            $netBalance = $totalDebits - $totalCredits; // Positivo = debemos pagar, Negativo = tenemos crédito
+            
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'credit_notes' => $unassociatedCreditNotes->values()->toArray(),
+                    'debit_notes' => $unassociatedDebitNotes->values()->toArray(),
+                    'summary' => [
+                        'total_credits' => $totalCredits,
+                        'total_debits' => $totalDebits,
+                        'net_balance' => $netBalance,
+                        'net_balance_type' => $netBalance >= 0 ? 'debit' : 'credit',
+                    ],
+                ],
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error in getBalances: ' . $e->getMessage(), [
+                'company_id' => $companyId,
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'error' => 'Error al cargar saldos: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }

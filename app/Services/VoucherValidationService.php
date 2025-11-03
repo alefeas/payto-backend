@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Validator;
 
 class VoucherValidationService
 {
-    public function validateVoucher(array $data, string $type): array
+    public function validateVoucher(array $data, string $type, ?string $companyId = null): array
     {
         $category = VoucherTypeService::getCategory($type);
         
@@ -48,7 +48,7 @@ class VoucherValidationService
         }
         
         // Validaciones de negocio
-        $businessValidation = $this->validateBusinessRules($data, $type);
+        $businessValidation = $this->validateBusinessRules($data, $type, $companyId);
         if (!$businessValidation['valid']) {
             return $businessValidation;
         }
@@ -115,13 +115,13 @@ class VoucherValidationService
         ];
     }
     
-    private function validateBusinessRules(array $data, string $type): array
+    private function validateBusinessRules(array $data, string $type, ?string $companyId = null): array
     {
         $category = VoucherTypeService::getCategory($type);
         
         // Validar NC/ND
         if (in_array($category, ['credit_note', 'debit_note'])) {
-            return $this->validateAssociatedVoucher($data, $type);
+            return $this->validateAssociatedVoucher($data, $type, $companyId);
         }
         
         // Validar FCE MiPyME
@@ -132,7 +132,7 @@ class VoucherValidationService
         return ['valid' => true];
     }
     
-    private function validateAssociatedVoucher(array $data, string $type): array
+    private function validateAssociatedVoucher(array $data, string $type, ?string $companyId = null): array
     {
         $relatedInvoice = Invoice::find($data['related_invoice_id']);
         
@@ -179,7 +179,12 @@ class VoucherValidationService
         }
         
         // Validar que la factura no esté anulada
-        if ($relatedInvoice->status === 'cancelled' || ($relatedInvoice->balance_pending !== null && $relatedInvoice->balance_pending <= 0)) {
+        // Usar el cálculo correcto del saldo disponible
+        $availableBalance = $companyId 
+            ? $this->calculateAvailableBalance($relatedInvoice, $companyId)
+            : ($relatedInvoice->balance_pending ?? $relatedInvoice->total);
+            
+        if ($relatedInvoice->status === 'cancelled' || $availableBalance <= 0) {
             return [
                 'valid' => false, 
                 'errors' => [
@@ -214,13 +219,27 @@ class VoucherValidationService
             ];
         }
         
-        // Validar monto disponible
+        // Validar monto disponible usando el cálculo correcto
         $category = VoucherTypeService::getCategory($type);
         $totalRequested = $this->calculateTotal($data);
-        $availableBalance = $relatedInvoice->balance_pending ?? $relatedInvoice->total;
+        
+        // Redondear ambos valores para evitar problemas de precisión de punto flotante
+        $totalRequested = round($totalRequested, 2);
+        $availableBalance = round($availableBalance, 2);
         
         if ($category === 'credit_note' && $totalRequested > $availableBalance) {
-            return ['valid' => false, 'errors' => ['total' => ['El monto excede el saldo disponible de la factura']]];
+            return [
+                'valid' => false, 
+                'errors' => [
+                    'total' => [
+                        sprintf(
+                            'El monto (ARS $%s) excede el saldo disponible de la factura (ARS $%s)',
+                            number_format($totalRequested, 2, ',', '.'),
+                            number_format($availableBalance, 2, ',', '.')
+                        )
+                    ]
+                ]
+            ];
         }
         
         return ['valid' => true];
@@ -239,12 +258,91 @@ class VoucherValidationService
         $totalTaxes = 0;
         
         foreach ($data['items'] ?? [] as $item) {
-            $itemSubtotal = $item['quantity'] * $item['unit_price'];
-            $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+            $itemBase = $item['quantity'] * $item['unit_price'];
+            
+            // Considerar descuentos si existen (igual que en el frontend y otros lugares)
+            $discountPercentage = isset($item['discount_percentage']) ? (float)$item['discount_percentage'] : 0;
+            $discount = $itemBase * ($discountPercentage / 100);
+            $itemSubtotal = $itemBase - $discount;
+            
+            // Exento (-1) y No Gravado (-2) tienen IVA = 0
+            $taxRate = isset($item['tax_rate']) ? (float)$item['tax_rate'] : 0;
+            $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
+            
             $subtotal += $itemSubtotal;
             $totalTaxes += $itemTax;
         }
         
-        return $subtotal + $totalTaxes;
+        // Considerar percepciones si existen
+        $totalPerceptions = 0;
+        foreach ($data['perceptions'] ?? [] as $perception) {
+            // Determinar base según base_type (similar al frontend)
+            $perceptionBase = match($perception['base_type'] ?? 'net') {
+                'vat' => $totalTaxes,
+                'total' => $subtotal + $totalTaxes,
+                'net' => $subtotal,
+                default => $subtotal,
+            };
+            
+            $rate = isset($perception['rate']) ? (float)$perception['rate'] : (isset($perception['percentage']) ? (float)$perception['percentage'] : 0);
+            $totalPerceptions += $perceptionBase * ($rate / 100);
+        }
+        
+        return $subtotal + $totalTaxes + $totalPerceptions;
+    }
+    
+    /**
+     * Calculate available balance for an invoice (considering NC/ND and collections/payments)
+     * Uses the same logic as InvoiceController::calculateAvailableBalance
+     */
+    private function calculateAvailableBalance(Invoice $invoice, string $companyId): float
+    {
+        // Always recalculate to ensure accuracy (balance_pending might be stale)
+        // Calculate total NC (credit notes) associated with this invoice
+        $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Calculate total ND (debit notes) associated with this invoice
+        $totalND = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Determine if invoice is issued (by this company) or received
+        $isIssued = (string)$invoice->issuer_company_id === (string)$companyId;
+        
+        // Calculate confirmed collections (for issued invoices)
+        $totalCollections = 0;
+        if ($isIssued) {
+            if ($invoice->collections && $invoice->collections->isNotEmpty()) {
+                $totalCollections = $invoice->collections
+                    ->where('company_id', $companyId)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+            } else {
+                // Fallback to query if relation not loaded
+                $totalCollections = \App\Models\Collection::where('invoice_id', $invoice->id)
+                    ->where('company_id', $companyId)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+            }
+        }
+        
+        // Calculate confirmed payments (for received invoices)
+        $totalPayments = 0;
+        if (!$isIssued) {
+            $totalPayments = \Illuminate\Support\Facades\DB::table('invoice_payments_tracking')
+                ->where('invoice_id', $invoice->id)
+                ->where('company_id', $companyId)
+                ->whereIn('status', ['confirmed', 'in_process'])
+                ->sum('amount');
+        }
+        
+        // Balance = Total + ND - NC - Collections - Payments
+        $balance = ($invoice->total ?? 0) + $totalND - $totalNC - $totalCollections - $totalPayments;
+        
+        return round(max(0, $balance), 2); // Ensure non-negative
     }
 }

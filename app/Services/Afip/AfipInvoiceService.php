@@ -431,7 +431,8 @@ class AfipInvoiceService
                     
                     // Validar monto de NC no supere el balance pendiente
                     if ($category === 'credit_note') {
-                        // Recalcular balance actual considerando NC/ND previas
+                        // Recalcular balance actual considerando NC/ND previas Y cobros/pagos
+                        // Usar el mismo cálculo que en VoucherValidationService y InvoiceController
                         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
                             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                             ->where('status', '!=', 'cancelled')
@@ -444,12 +445,38 @@ class AfipInvoiceService
                             ->where('afip_status', 'approved')
                             ->sum('total');
                         
-                        $currentBalance = $relatedInvoice->total + $totalND - $totalNC;
+                        // Determinar si la factura es emitida o recibida
+                        $isIssued = (string)$relatedInvoice->issuer_company_id === (string)$invoice->issuer_company_id;
                         
-                        if ($invoice->total > $currentBalance) {
+                        // Calcular cobros confirmados (para facturas emitidas)
+                        $totalCollections = 0;
+                        if ($isIssued) {
+                            $totalCollections = \App\Models\Collection::where('invoice_id', $relatedInvoice->id)
+                                ->where('status', 'confirmed')
+                                ->sum('amount');
+                        }
+                        
+                        // Calcular pagos confirmados (para facturas recibidas)
+                        $totalPayments = 0;
+                        if (!$isIssued) {
+                            $totalPayments = \Illuminate\Support\Facades\DB::table('invoice_payments_tracking')
+                                ->where('invoice_id', $relatedInvoice->id)
+                                ->whereIn('status', ['confirmed', 'in_process'])
+                                ->sum('amount');
+                        }
+                        
+                        // Balance = Total + ND - NC - Collections - Payments
+                        $currentBalance = ($relatedInvoice->total ?? 0) + $totalND - $totalNC - $totalCollections - $totalPayments;
+                        $currentBalance = round(max(0, $currentBalance), 2); // Ensure non-negative and rounded
+                        
+                        // Redondear el total de la nota también para comparar correctamente
+                        $invoiceTotal = round($invoice->total, 2);
+                        
+                        if ($invoiceTotal > $currentBalance) {
                             throw new \Exception(
-                                "El monto de la Nota de Crédito (\${$invoice->total}) no puede superar el saldo pendiente de la factura (\${$currentBalance}). "
-                                . "Factura original: \${$relatedInvoice->total} | NC previas: \${$totalNC} | ND previas: \${$totalND}"
+                                "El monto de la Nota de Crédito (\${$invoiceTotal}) no puede superar el saldo pendiente de la factura (\${$currentBalance}). "
+                                . "Factura original: \${$relatedInvoice->total} | NC previas: \${$totalNC} | ND previas: \${$totalND} | "
+                                . ($isIssued ? "Cobros confirmados: \${$totalCollections}" : "Pagos confirmados: \${$totalPayments}")
                             );
                         }
                     }

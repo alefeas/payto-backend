@@ -317,7 +317,7 @@ class VoucherController extends Controller
         ]);
         
         // Validar
-        $validation = $this->validationService->validateVoucher($request->all(), $voucherType);
+        $validation = $this->validationService->validateVoucher($request->all(), $voucherType, $companyId);
         if (!$validation['valid']) {
             Log::warning('Voucher validation failed', [
                 'company_id' => $companyId,
@@ -445,12 +445,21 @@ class VoucherController extends Controller
             throw new \Exception('No se pudo consultar AFIP: ' . $e->getMessage());
         }
         
-        // Calcular totales
+        // Calcular totales (considerando descuentos igual que en otros lugares)
         $subtotal = 0;
         $totalTaxes = 0;
         foreach ($data['items'] as $item) {
-            $itemSubtotal = $item['quantity'] * $item['unit_price'];
-            $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+            $itemBase = $item['quantity'] * $item['unit_price'];
+            
+            // Considerar descuentos si existen
+            $discountPercentage = isset($item['discount_percentage']) ? (float)$item['discount_percentage'] : 0;
+            $discount = $itemBase * ($discountPercentage / 100);
+            $itemSubtotal = $itemBase - $discount;
+            
+            // Exento (-1) y No Gravado (-2) tienen IVA = 0
+            $taxRate = isset($item['tax_rate']) ? (float)$item['tax_rate'] : 0;
+            $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
+            
             $subtotal += $itemSubtotal;
             $totalTaxes += $itemTax;
         }
@@ -459,10 +468,20 @@ class VoucherController extends Controller
         $totalPerceptions = 0;
         if (isset($data['perceptions'])) {
             foreach ($data['perceptions'] as $perception) {
-                $baseAmount = $perception['type'] === 'vat_perception' 
-                    ? $totalTaxes 
-                    : ($subtotal + $totalTaxes);
-                $totalPerceptions += $baseAmount * ($perception['rate'] / 100);
+                // Determinar base según base_type (similar al frontend y otros servicios)
+                $baseType = $perception['base_type'] ?? 'net';
+                $baseAmount = match($baseType) {
+                    'vat' => $totalTaxes,
+                    'total' => $subtotal + $totalTaxes,
+                    'net' => $subtotal,
+                    default => $subtotal,
+                };
+                
+                // Compatibilidad con formatos antiguos (type vs rate)
+                $rate = isset($perception['rate']) ? (float)$perception['rate'] : 
+                       (isset($perception['percentage']) ? (float)$perception['percentage'] : 0);
+                
+                $totalPerceptions += $baseAmount * ($rate / 100);
             }
         }
         

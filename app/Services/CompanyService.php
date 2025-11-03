@@ -43,6 +43,7 @@ class CompanyService implements CompanyServiceInterface
             'street_number' => $data['street_number'] ?? '',
             'floor' => $data['floor'] ?? null,
             'apartment' => $data['apartment'] ?? null,
+            'city' => $data['city'] ?? '',
             'postal_code' => $data['postal_code'] ?? '',
             'province' => $data['province'] ?? '',
         ]);
@@ -181,7 +182,7 @@ class CompanyService implements CompanyServiceInterface
             'auto_retentions' => $data['auto_retentions'] ?? $company->auto_retentions,
         ];
 
-        if (isset($data['street']) || isset($data['street_number']) || isset($data['postal_code']) || isset($data['province'])) {
+        if (isset($data['street']) || isset($data['street_number']) || isset($data['city']) || isset($data['postal_code']) || isset($data['province'])) {
             $company->address()->updateOrCreate(
                 ['company_id' => $company->id],
                 [
@@ -189,6 +190,7 @@ class CompanyService implements CompanyServiceInterface
                     'street_number' => $data['street_number'] ?? '',
                     'floor' => $data['floor'] ?? null,
                     'apartment' => $data['apartment'] ?? null,
+                    'city' => $data['city'] ?? '',
                     'postal_code' => $data['postal_code'] ?? '',
                     'province' => $data['province'] ?? '',
                 ]
@@ -358,9 +360,9 @@ class CompanyService implements CompanyServiceInterface
             'isActive' => $company->is_active,
             'uniqueId' => $company->unique_id,
             'inviteCode' => $company->invite_code,
-            'role' => $member?->role,
-            'createdAt' => $company->created_at->toIso8601String(),
-            'updatedAt' => $company->updated_at->toIso8601String(),
+            'role' => $member?->role ?? null,
+            'createdAt' => $company->created_at?->toIso8601String() ?? now()->toIso8601String(),
+            'updatedAt' => $company->updated_at?->toIso8601String() ?? now()->toIso8601String(),
         ];
     }
 }

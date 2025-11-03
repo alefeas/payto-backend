@@ -6,6 +6,17 @@ use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Services\Afip\AfipInvoiceService;
+use App\Services\InvoiceService;
+use App\Services\InvoiceSyncService;
+use App\Http\Requests\StoreInvoiceRequest;
+use App\Http\Requests\StoreManualIssuedInvoiceRequest;
+use App\Http\Requests\StoreManualReceivedInvoiceRequest;
+use App\Http\Requests\UpdateSyncedInvoiceRequest;
+use App\Http\Requests\SyncFromAfipRequest;
+use App\Http\Requests\ValidateWithAfipRequest;
+use App\Http\Requests\GetNextNumberRequest;
+use App\Http\Requests\GetAssociableInvoicesRequest;
+use App\Http\Requests\DownloadBulkRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -14,282 +25,34 @@ use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 class InvoiceController extends Controller
 {
     use AuthorizesRequests;
+
+    public function __construct(
+        private InvoiceService $invoiceService,
+        private InvoiceSyncService $invoiceSyncService
+    ) {}
     
-    /**
-     * Normalizar CUIT: remover guiones para comparación
-     * AFIP devuelve: 20123456789
-     * Sistema guarda: 20-12345678-9
-     */
-    private function normalizeCuit(string $cuit): string
-    {
-        return str_replace('-', '', $cuit);
-    }
+    // normalizeCuit, formatCuitWithHyphens, findConnectedCompanyByCuit moved to CuitHelperService
     public function index(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         
         $this->authorize('viewAny', [Invoice::class, $company]);
 
-        $status = $request->query('status');
-        $search = $request->query('search');
-        $type = $request->query('type');
-        $client = $request->query('client');
-        $dateFrom = $request->query('date_from');
-        $dateTo = $request->query('date_to');
-        
-        // Solo facturas emitidas por esta empresa O recibidas por esta empresa
-        $query = Invoice::where(function($q) use ($companyId) {
-                $q->where('issuer_company_id', $companyId)
-                  ->orWhere('receiver_company_id', $companyId);
-            })
-            ->with([
-                'client' => function($query) { $query->withTrashed(); },
-                'supplier' => function($query) { $query->withTrashed(); },
-                'items', 'issuerCompany', 'receiverCompany', 'approvals.user', 'relatedInvoice', 'payments', 'collections'
-            ]);
+        $filters = [
+            'status' => $request->query('status'),
+            'search' => $request->query('search'),
+            'type' => $request->query('type'),
+            'client' => $request->query('client'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+        ];
 
-        if ($status && $status !== 'all') {
-            if ($status === 'overdue') {
-                // Vencidas: fecha vencida Y sin pagos/cobranzas Y no rechazadas
-                $query->whereDate('due_date', '<', now())
-                      ->whereNotIn('status', ['cancelled'])
-                      ->whereRaw("(company_statuses IS NULL OR JSON_SEARCH(company_statuses, 'one', 'rejected') IS NULL)")
-                      ->whereDoesntHave('collections', function($q) use ($companyId) {
-                          $q->where('company_id', $companyId)
-                            ->where('status', 'confirmed');
-                      })
-                      ->whereNotExists(function($q) use ($companyId) {
-                          $q->select(DB::raw(1))
-                            ->from('invoice_payments_tracking')
-                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
-                            ->where('invoice_payments_tracking.company_id', $companyId)
-                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
-                      });
-            } elseif ($status === 'collected') {
-                // Facturas emitidas con collections confirmadas que cubren el total (excluir anuladas)
-                $query->where('issuer_company_id', $companyId)
-                      ->where('status', '!=', 'cancelled')
-                      ->whereHas('collections', function($q) use ($companyId) {
-                          $q->where('company_id', $companyId)
-                            ->where('status', 'confirmed');
-                      });
-            } elseif ($status === 'paid') {
-                // Facturas recibidas con payments confirmados que cubren el total (excluir anuladas)
-                $query->where('receiver_company_id', $companyId)
-                      ->where('status', '!=', 'cancelled')
-                      ->whereExists(function($q) use ($companyId) {
-                          $q->select(DB::raw(1))
-                            ->from('invoice_payments_tracking')
-                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
-                            ->where('invoice_payments_tracking.company_id', $companyId)
-                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
-                      });
-            } elseif ($status === 'approved') {
-                // Aprobadas: tienen 'approved' en company_statuses Y no están pagadas/cobradas
-                $query->whereRaw("JSON_SEARCH(company_statuses, 'one', 'approved') IS NOT NULL")
-                      ->whereRaw("JSON_SEARCH(company_statuses, 'one', 'paid') IS NULL")
-                      ->whereDoesntHave('collections', function($q) use ($companyId) {
-                          $q->where('company_id', $companyId)
-                            ->where('status', 'confirmed');
-                      })
-                      ->whereNotExists(function($q) use ($companyId) {
-                          $q->select(DB::raw(1))
-                            ->from('invoice_payments_tracking')
-                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
-                            ->where('invoice_payments_tracking.company_id', $companyId)
-                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
-                      });
-            } elseif ($status === 'rejected') {
-                // Buscar en company_statuses por cualquier clave que tenga 'rejected'
-                $query->whereRaw("JSON_SEARCH(company_statuses, 'one', 'rejected') IS NOT NULL");
-            } elseif ($status === 'pending_approval') {
-                $query->where('status', 'pending_approval')
-                      ->where(function($q) use ($companyId) {
-                          $q->whereNull('company_statuses')
-                            ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"')) = 'pending_approval'");
-                      });
-            } elseif ($status === 'issued') {
-                // Facturas emitidas sin pagos/cobranzas
-                $query->where('status', 'issued')
-                      ->whereDoesntHave('collections', function($q) use ($companyId) {
-                          $q->where('company_id', $companyId)
-                            ->where('status', 'confirmed');
-                      })
-                      ->whereNotExists(function($q) use ($companyId) {
-                          $q->select(DB::raw(1))
-                            ->from('invoice_payments_tracking')
-                            ->whereColumn('invoice_payments_tracking.invoice_id', 'invoices.id')
-                            ->where('invoice_payments_tracking.company_id', $companyId)
-                            ->whereIn('invoice_payments_tracking.status', ['confirmed', 'in_process']);
-                      });
-            } elseif ($status === 'partially_cancelled') {
-                // Parcialmente anuladas: tienen NC/ND pero NO están totalmente cobradas/pagadas
-                // Usar balance_pending para determinar si aún hay saldo pendiente
-                $query->where('status', 'partially_cancelled')
-                      ->where(function($q) {
-                          $q->whereNull('balance_pending')
-                            ->orWhere('balance_pending', '>', 0);
-                      });
-            } else {
-                $query->where('status', $status);
-            }
-        }
-        
-        if ($search) {
-            $query->where(function($q) use ($search) {
-                $q->where('number', 'like', '%' . $search . '%')
-                  ->orWhere('receiver_name', 'like', '%' . $search . '%')
-                  ->orWhereHas('client', function($q) use ($search) {
-                      $q->where('business_name', 'like', '%' . $search . '%')
-                        ->orWhere('first_name', 'like', '%' . $search . '%')
-                        ->orWhere('last_name', 'like', '%' . $search . '%');
-                  });
-            });
-        }
-        
-        if ($type && $type !== 'all') {
-            $query->where('type', $type);
-        }
-        
-        if ($client && $client !== 'all') {
-            $query->where(function($q) use ($client) {
-                $q->where('receiver_name', $client)
-                  ->orWhereHas('client', function($q) use ($client) {
-                      $q->where('business_name', $client)
-                        ->orWhereRaw("CONCAT(first_name, ' ', last_name) = ?", [$client]);
-                  });
-            });
-        }
-        
-        if ($dateFrom) {
-            $query->whereDate('issue_date', '>=', $dateFrom);
-        }
-        
-        if ($dateTo) {
-            $query->whereDate('issue_date', '<=', $dateTo);
-        }
-
-        $invoices = $query->orderBy('created_at', 'desc')
-            ->paginate(20);
-        
-        // Override approvals_required with current company setting and format approvals
-        $invoices->getCollection()->transform(function ($invoice) use ($company, $companyId) {
-
-            $invoice->direction = $invoice->issuer_company_id === $companyId ? 'issued' : 'received';
-            
-            // Usar estados por empresa desde JSON
-            $companyStatuses = $invoice->company_statuses ?: [];
-            $companyIdInt = (int)$companyId;
-            
-            // Priorizar cancelled si la factura está anulada
-            if ($invoice->status === 'cancelled') {
-                $invoice->display_status = 'cancelled';
-            } elseif (isset($companyStatuses[$companyIdInt])) {
-                $invoice->display_status = $companyStatuses[$companyIdInt];
-            } else {
-                // Fallback al status global
-                if ($invoice->direction === 'issued') {
-                    $invoice->display_status = $invoice->status;
-                } else {
-                    $invoice->display_status = $invoice->status === 'issued' 
-                        ? ($company->required_approvals > 0 ? 'pending_approval' : 'approved')
-                        : $invoice->status;
-                }
-            }
-            
-            // Calcular payment_status y pending_amount según dirección
-            $paidAmount = 0;
-            if ($invoice->direction === 'issued') {
-                // Para facturas emitidas, usar collections
-                $paidAmount = $invoice->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
-            } else {
-                // Para facturas recibidas, usar payments
-                $paidAmount = \DB::table('invoice_payments_tracking')
-                    ->where('invoice_id', $invoice->id)
-                    ->where('company_id', $companyId)
-                    ->whereIn('status', ['confirmed', 'in_process'])
-                    ->sum('amount');
-            }
-            
-            // Recalcular balance_pending considerando NC/ND
-            $totalNC = Invoice::where('related_invoice_id', $invoice->id)
-                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                ->where('status', '!=', 'cancelled')
-                ->sum('total');
-            
-            $totalND = Invoice::where('related_invoice_id', $invoice->id)
-                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                ->where('status', '!=', 'cancelled')
-                ->sum('total');
-            
-            $total = $invoice->total ?? 0;
-            $adjustedTotal = $total + $totalND - $totalNC;
-            $invoice->paid_amount = $paidAmount;
-            $invoice->pending_amount = $adjustedTotal - $paidAmount;
-            $invoice->balance_pending = $invoice->pending_amount;
-            
-            // Facturas anuladas no tienen payment_status
-            if ($invoice->status === 'cancelled') {
-                $invoice->payment_status = 'cancelled';
-                Log::info('Setting payment_status to cancelled', [
-                    'invoice_number' => $invoice->number,
-                    'status' => $invoice->status,
-                    'display_status' => $invoice->display_status ?? 'not set yet',
-                ]);
-            } elseif ($paidAmount >= $adjustedTotal) {
-                $invoice->payment_status = 'paid';
-            } elseif ($paidAmount > 0) {
-                $invoice->payment_status = 'partial';
-            } else {
-                $invoice->payment_status = 'pending';
-            }
-            
-            // Solo override approvals_required si la empresa es la receptora
-            if ($invoice->receiver_company_id === $companyId) {
-                $invoice->approvals_required = $company->required_approvals;
-            }
-            
-            // Solo agregar receiver_name y receiver_document si no están ya guardados
-            if (!$invoice->receiver_name || !$invoice->receiver_document) {
-                if ($invoice->receiverCompany) {
-                    $invoice->receiver_name = $invoice->receiverCompany->name;
-                    $invoice->receiver_document = $invoice->receiverCompany->national_id;
-                } elseif ($invoice->client) {
-                    $invoice->receiver_name = $invoice->client->business_name 
-                        ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
-                        ?: null;
-                    $invoice->receiver_document = $invoice->client->document_number;
-                }
-            }
-            
-            // Format approvals for frontend
-            if ($invoice->approvals && $invoice->approvals->count() > 0) {
-                $invoice->approvals = $invoice->approvals->map(function ($approval) {
-                    $fullName = trim($approval->user->first_name . ' ' . $approval->user->last_name);
-                    return [
-                        'id' => $approval->id,
-                        'user' => [
-                            'id' => $approval->user->id,
-                            'name' => $fullName ?: $approval->user->email,
-                            'first_name' => $approval->user->first_name,
-                            'last_name' => $approval->user->last_name,
-                            'email' => $approval->user->email,
-                        ],
-                        'notes' => $approval->notes,
-                        'approved_at' => $approval->approved_at->toIso8601String(),
-                    ];
-                })->values();
-            } else {
-                $invoice->approvals = [];
-            }
-            
-            return $invoice;
-        });
+        $invoices = $this->invoiceService->getInvoices($companyId, $filters);
 
         return response()->json($invoices);
     }
 
-    public function store(Request $request, $companyId)
+    public function store(StoreInvoiceRequest $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         
@@ -304,52 +67,7 @@ class InvoiceController extends Controller
             ], 403);
         }
 
-        // Obtener mensajes de validación desde configuración
-        $validationMessages = array_merge(
-            config('afip_rules.validation_messages', []),
-            [
-                'items.*.quantity.max' => 'La cantidad no puede superar las 999,999 unidades. Si necesitás facturar más, dividí en múltiples ítems.',
-                'items.*.unit_price.max' => 'El precio unitario no puede superar $999,999,999. Si necesitás facturar montos mayores, dividí en múltiples ítems.',
-                'due_date.date' => 'La fecha de vencimiento debe ser una fecha válida.',
-            ]
-        );
-
-        $validated = $request->validate([
-            'client_id' => 'required_without_all:client_data,receiver_company_id|exists:clients,id',
-            'receiver_company_id' => 'nullable|exists:companies,id',
-            'client_data' => 'required_without_all:client_id,receiver_company_id|array',
-            'client_data.document_type' => 'required_with:client_data|in:CUIT,CUIL,DNI,Pasaporte,CDI',
-            'client_data.document_number' => 'required_with:client_data|string',
-            'client_data.business_name' => 'nullable|string',
-            'client_data.first_name' => 'nullable|string',
-            'client_data.last_name' => 'nullable|string',
-            'client_data.email' => 'nullable|email',
-            'client_data.tax_condition' => 'required_with:client_data|in:registered_taxpayer,monotax,exempt,final_consumer',
-            'save_client' => 'boolean',
-            'invoice_type' => 'required|string',
-            'sales_point' => 'required|integer|min:1|max:9999',
-            'concept' => 'required|in:products,services,products_services',
-            'service_date_from' => 'nullable|date',
-            'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
-            'issue_date' => 'required|date',
-            'due_date' => 'nullable|date|after_or_equal:issue_date|before:2030-01-01',
-            'currency' => 'nullable|string|size:3',
-            'exchange_rate' => 'nullable|numeric|min:0',
-            'notes' => 'nullable|string',
-            'items' => 'required|array|min:1',
-            'items.*.description' => 'required|string',
-            'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
-            'items.*.unit_price' => 'required|numeric|min:0|max:999999999',
-            'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
-            'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
-            'perceptions' => 'nullable|array',
-            'perceptions.*.type' => 'required|string|max:100',
-            'perceptions.*.name' => 'required|string|max:100',
-            'perceptions.*.rate' => 'nullable|numeric|min:0|max:100',
-            'perceptions.*.amount' => 'nullable|numeric|min:0',
-            'perceptions.*.jurisdiction' => 'nullable|string|max:100',
-            'perceptions.*.base_type' => 'nullable|in:net,total,vat',
-        ], $validationMessages);
+        $validated = $request->validated();
 
         try {
             DB::beginTransaction();
@@ -659,52 +377,9 @@ class InvoiceController extends Controller
     {
         $company = Company::findOrFail($companyId);
         
-        $invoice = Invoice::where(function($q) use ($companyId) {
-                $q->where('issuer_company_id', $companyId)
-                  ->orWhere('receiver_company_id', $companyId);
-            })
-            ->with([
-                'client' => function($query) { $query->withTrashed(); },
-                'supplier' => function($query) { $query->withTrashed(); },
-                'items', 'receiverCompany', 'issuerCompany', 'perceptions', 'collections'
-            ])
-            ->findOrFail($id);
+        $invoice = $this->invoiceService->getInvoice($companyId, $id);
 
         $this->authorize('view', $invoice);
-        
-        $invoice->direction = $invoice->issuer_company_id === (int)$companyId ? 'issued' : 'received';
-        if ($invoice->direction === 'received' && $invoice->status === 'issued') {
-            $invoice->display_status = $company->required_approvals > 0 ? 'pending_approval' : 'approved';
-        } else {
-            $invoice->display_status = $invoice->status;
-        }
-        
-        if (!$invoice->receiver_name || !$invoice->receiver_document) {
-            if ($invoice->receiverCompany) {
-                $invoice->receiver_name = $invoice->receiverCompany->name;
-                $invoice->receiver_document = $invoice->receiverCompany->national_id;
-            } elseif ($invoice->client) {
-                $invoice->receiver_name = $invoice->client->business_name 
-                    ?? trim($invoice->client->first_name . ' ' . $invoice->client->last_name)
-                    ?: null;
-                $invoice->receiver_document = $invoice->client->document_number;
-            }
-        }
-        
-        // Agregar retenciones desde collections confirmadas
-        $confirmedCollections = $invoice->collections->where('status', 'confirmed');
-        if ($confirmedCollections->isNotEmpty()) {
-            $invoice->withholding_iibb = $confirmedCollections->sum('withholding_iibb');
-            $invoice->withholding_iibb_notes = $confirmedCollections->whereNotNull('withholding_iibb_notes')->pluck('withholding_iibb_notes')->filter()->implode(', ');
-            $invoice->withholding_iva = $confirmedCollections->sum('withholding_iva');
-            $invoice->withholding_iva_notes = $confirmedCollections->whereNotNull('withholding_iva_notes')->pluck('withholding_iva_notes')->filter()->implode(', ');
-            $invoice->withholding_ganancias = $confirmedCollections->sum('withholding_ganancias');
-            $invoice->withholding_ganancias_notes = $confirmedCollections->whereNotNull('withholding_ganancias_notes')->pluck('withholding_ganancias_notes')->filter()->implode(', ');
-            $invoice->withholding_suss = $confirmedCollections->sum('withholding_suss');
-            $invoice->withholding_suss_notes = $confirmedCollections->whereNotNull('withholding_suss_notes')->pluck('withholding_suss_notes')->filter()->implode(', ');
-            $invoice->withholding_other = $confirmedCollections->sum('withholding_other');
-            $invoice->withholding_other_notes = $confirmedCollections->whereNotNull('withholding_other_notes')->pluck('withholding_other_notes')->filter()->implode(', ');
-        }
 
         return response()->json($invoice);
     }
@@ -811,17 +486,13 @@ class InvoiceController extends Controller
         ]);
     }
 
-    public function validateWithAfip(Request $request, $companyId)
+    public function validateWithAfip(ValidateWithAfipRequest $request, $companyId)
     {
         $company = Company::with('afipCertificate')->findOrFail($companyId);
         
         $this->authorize('create', [Invoice::class, $company]);
 
-        $validated = $request->validate([
-            'issuer_cuit' => 'required|string',
-            'invoice_type' => 'required|in:A,B,C,M,NCA,NCB,NCC,NCM,NDA,NDB,NDC,NDM',
-            'invoice_number' => 'required|string|regex:/^\d{4}-\d{8}$/',
-        ]);
+        $validated = $request->validated();
 
         try {
             // Parse invoice number
@@ -853,20 +524,13 @@ class InvoiceController extends Controller
         }
     }
 
-    public function syncFromAfip(Request $request, $companyId)
+    public function syncFromAfip(SyncFromAfipRequest $request, $companyId)
     {
         $company = Company::with('afipCertificate')->findOrFail($companyId);
         
         $this->authorize('create', [Invoice::class, $company]);
 
-        $validated = $request->validate([
-            'mode' => 'required|in:single,date_range',
-            'sales_point' => 'required_if:mode,single|integer|min:1|max:9999',
-            'invoice_type' => 'required_if:mode,single|string',
-            'invoice_number' => 'required_if:mode,single|integer|min:1',
-            'date_from' => 'required_if:mode,date_range|date',
-            'date_to' => 'required_if:mode,date_range|date|after_or_equal:date_from',
-        ]);
+        $validated = $request->validated();
 
         if (!$company->afipCertificate || !$company->afipCertificate->is_active) {
             return response()->json([
@@ -879,9 +543,23 @@ class InvoiceController extends Controller
             $afipService = new AfipInvoiceService($company);
             
             if ($validated['mode'] === 'single') {
-                return $this->syncSingleInvoice($company, $afipService, $validated);
+                $result = $this->invoiceSyncService->syncSingleInvoice($company, $afipService, $validated);
+                
+                // Handle response format
+                if (isset($result['success']) && !$result['success']) {
+                    return response()->json($result, 404);
+                }
+                
+                return response()->json($result, 200);
             } else {
-                return $this->syncByDateRange($company, $afipService, $validated);
+                $result = $this->invoiceSyncService->syncByDateRange($company, $afipService, $validated);
+                
+                // Handle response format
+                if (isset($result['success']) && !$result['success']) {
+                    return response()->json($result, 422);
+                }
+                
+                return response()->json($result, 200);
             }
 
         } catch (\Exception $e) {
@@ -899,434 +577,7 @@ class InvoiceController extends Controller
         }
     }
 
-    private function syncSingleInvoice($company, $afipService, $validated)
-    {
-        $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
-        $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
-        
-        try {
-            Log::info('🔍 CALLING AFIP consultInvoice (single)', [
-                'issuer_cuit' => $company->national_id,
-                'invoice_type_code' => $invoiceTypeCode,
-                'sales_point' => $validated['sales_point'],
-                'voucher_number' => $validated['invoice_number'],
-            ]);
-            
-            $afipData = $afipService->consultInvoice(
-                $company->national_id,
-                $invoiceTypeCode,
-                $validated['sales_point'],
-                $validated['invoice_number']
-            );
-            
-            Log::info('📥 AFIP RESPONSE RECEIVED (single)', [
-                'found' => $afipData['found'] ?? false,
-                'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
-                'cae' => $afipData['cae'] ?? 'NULL',
-                'issue_date' => $afipData['issue_date'] ?? 'NULL',
-            ]);
-
-            if ($afipData['found']) {
-                DB::beginTransaction();
-                
-                $formattedNumber = sprintf('%04d-%08d', $validated['sales_point'], $validated['invoice_number']);
-                
-                // Eliminar factura soft-deleted si existe
-                Invoice::onlyTrashed()
-                    ->where('issuer_company_id', $company->id)
-                    ->where('type', $invoiceType)
-                    ->where('sales_point', $validated['sales_point'])
-                    ->where('voucher_number', $validated['invoice_number'])
-                    ->forceDelete();
-                
-                $exists = Invoice::where('issuer_company_id', $company->id)
-                    ->where('type', $invoiceType)
-                    ->where('sales_point', $validated['sales_point'])
-                    ->where('voucher_number', $validated['invoice_number'])
-                    ->exists();
-                
-                Log::info('Checking if invoice exists', [
-                    'company_id' => $company->id,
-                    'type' => $invoiceType,
-                    'sales_point' => $validated['sales_point'],
-                    'voucher_number' => $validated['invoice_number'],
-                    'exists' => $exists,
-                ]);
-                
-                if (!$exists) {
-                    // Buscar receptor por CUIT - PRIORIZAR empresas conectadas
-                    $receiverCompanyId = null;
-                    $clientId = null;
-                    $receiverName = null;
-                    $receiverDocument = null;
-                    
-                    if (isset($afipData['doc_number']) && $afipData['doc_number'] != '0') {
-                        // AFIP devuelve CUIT sin guiones (20123456789)
-                        $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
-                        $receiverDocument = $this->formatCuitWithHyphens($normalizedCuit);
-                        
-                        Log::info('Processing CUIT from AFIP', [
-                            'afip_raw' => $afipData['doc_number'],
-                            'normalized' => $normalizedCuit,
-                            'formatted' => $receiverDocument,
-                        ]);
-                        
-                        // 1. Buscar empresa conectada PRIMERO
-                        $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
-                        
-                        if ($receiverCompany) {
-                            // Empresa conectada encontrada - usar receiver_company_id
-                            $receiverCompanyId = $receiverCompany->id;
-                            $receiverName = $receiverCompany->name;
-                            // NO usar client_id cuando hay empresa conectada
-                        } else {
-                            // 2. No hay empresa conectada - buscar cliente externo (incluir archivados)
-                            $client = \App\Models\Client::withTrashed()
-                                ->where('company_id', $company->id)
-                                ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
-                                ->first();
-                            
-                            if (!$client) {
-                                $client = \App\Models\Client::create([
-                                    'company_id' => $company->id,
-                                    'document_type' => 'CUIT',
-                                    'document_number' => $receiverDocument,
-                                    'business_name' => 'Cliente AFIP - ' . $receiverDocument,
-                                    'tax_condition' => 'monotax',
-                                    'address' => null,
-                                    'incomplete_data' => true,
-                                ]);
-                                $client->delete(); // Archivar inmediatamente
-                                $autoCreatedClient = true;
-                            }
-                            
-                            $clientId = $client->id;
-                            $receiverName = $client->business_name ?? trim($client->first_name . ' ' . $client->last_name);
-                        }
-                    }
-                    
-                    // AFIP no devuelve el concepto - usar default 'products'
-                    $concept = 'products';
-                    
-                    $invoice = Invoice::create([
-                        'number' => $formattedNumber,
-                        'type' => $invoiceType,
-                        'sales_point' => $validated['sales_point'],
-                        'voucher_number' => $validated['invoice_number'],
-                        'concept' => $concept,
-                        'issuer_company_id' => $company->id,
-                        'receiver_company_id' => $receiverCompanyId,
-                        'client_id' => $clientId,
-                        'issue_date' => $afipData['issue_date'],
-                        'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30)->format('Y-m-d'),
-                        'subtotal' => $afipData['subtotal'],
-                        'total_taxes' => $afipData['total_taxes'],
-                        'total_perceptions' => $afipData['total_perceptions'],
-                        'total' => $afipData['total'],
-                        'currency' => $afipData['currency'],
-                        'exchange_rate' => $afipData['exchange_rate'],
-                        'status' => 'issued',
-                        'afip_status' => 'approved',
-                        'afip_cae' => $afipData['cae'],
-                        'afip_cae_due_date' => $afipData['cae_expiration'],
-                        'receiver_name' => $receiverName,
-                        'receiver_document' => $receiverDocument,
-                        'needs_review' => isset($autoCreatedClient),
-                        'synced_from_afip' => true,
-                        'created_by' => auth()->id(),
-                    ]);
-                    
-                    // Crear item genérico ya que AFIP no devuelve detalle
-                    $invoice->items()->create([
-                        'description' => 'Productos/Servicios',
-                        'quantity' => 1,
-                        'unit_price' => $afipData['subtotal'],
-                        'discount_percentage' => 0,
-                        'tax_rate' => $afipData['subtotal'] > 0 ? ($afipData['total_taxes'] / $afipData['subtotal']) * 100 : 0,
-                        'tax_amount' => $afipData['total_taxes'],
-                        'subtotal' => $afipData['subtotal'],
-                        'order_index' => 0,
-                    ]);
-                }
-                
-                DB::commit();
-                
-                return response()->json([
-                    'success' => true,
-                    'imported_count' => 1,
-                    'auto_created_clients' => isset($autoCreatedClient) ? 1 : 0,
-                    'invoices' => [[
-                        'sales_point' => $validated['sales_point'],
-                        'type' => $validated['invoice_type'],
-                        'number' => $validated['invoice_number'],
-                        'formatted_number' => $formattedNumber,
-                        'data' => $afipData,
-                        'saved' => !$exists,
-                        'auto_created_client' => isset($autoCreatedClient),
-                    ]],
-                    'message' => isset($autoCreatedClient) 
-                        ? '⚠️ Factura sincronizada. Se creó automáticamente un cliente archivado con CUIT ' . $receiverDocument . '. Debes completar sus datos en la sección de Clientes Archivados antes de poder emitirle facturas.' 
-                        : 'Factura sincronizada correctamente.',
-                ]);
-            } else {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Factura no encontrada en AFIP',
-                ], 404);
-            }
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            Log::error('Single invoice sync failed', [
-                'company_id' => $company->id,
-                'sales_point' => $validated['sales_point'],
-                'invoice_type' => $validated['invoice_type'],
-                'invoice_number' => $validated['invoice_number'],
-                'error' => $e->getMessage(),
-            ]);
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'No se pudo sincronizar la factura desde AFIP. Verificá el punto de venta, tipo y número de comprobante',
-                'error' => $e->getMessage(),
-            ], 422);
-        }
-    }
-
-    private function syncByDateRange($company, $afipService, $validated)
-    {
-        try {
-            set_time_limit(600);
-            ini_set('max_execution_time', 600);
-
-            $dateFrom = \Carbon\Carbon::parse($validated['date_from'])->startOfDay();
-            $dateTo = \Carbon\Carbon::parse($validated['date_to'])->endOfDay();
-
-            if ($dateFrom->diffInDays($dateTo) > 90) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'El rango de fechas no puede superar los 90 días',
-                ], 422);
-            }
-
-            $voucherTypes = ['A', 'B', 'C', 'M', 'NCA', 'NCB', 'NCC', 'NCM', 'NDA', 'NDB', 'NDC', 'NDM'];
-            $salesPoints = $this->getAuthorizedSalesPoints($company);
-
-            if (empty($salesPoints)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'No se encontraron puntos de venta autorizados',
-                ], 422);
-            }
-
-            $imported = [];
-            $summary = [];
-            $autoCreatedClientsCount = 0;
-
-            // Fetch all existing invoices in batch to avoid N queries
-            $existingInvoices = Invoice::where('issuer_company_id', $company->id)
-                ->select('type', 'sales_point', 'voucher_number')
-                ->get()
-                ->mapWithKeys(function($inv) {
-                    return ["{$inv->type}-{$inv->sales_point}-{$inv->voucher_number}" => true];
-                })->toArray();
-
-            foreach ($voucherTypes as $type) {
-                $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($type) ?? $type;
-                $invoiceTypeCode = (int) \App\Services\VoucherTypeService::getAfipCode($invoiceType);
-
-                foreach ($salesPoints as $salesPoint) {
-                    try {
-                        $lastAfipNumber = $afipService->getLastAuthorizedInvoice($salesPoint, $invoiceTypeCode);
-
-                        if (!$lastAfipNumber || $lastAfipNumber == 0) continue;
-
-                        $summary[] = [
-                            'sales_point' => $salesPoint,
-                            'type' => $type,
-                            'last_number' => $lastAfipNumber,
-                        ];
-
-                        for ($num = 1; $num <= $lastAfipNumber; $num++) {
-                            try {
-                                Log::info('🔍 CALLING AFIP consultInvoice', [
-                                    'issuer_cuit' => $company->national_id,
-                                    'invoice_type_code' => $invoiceTypeCode,
-                                    'sales_point' => $salesPoint,
-                                    'voucher_number' => $num,
-                                ]);
-                                
-                                $afipData = $afipService->consultInvoice($company->national_id, $invoiceTypeCode, $salesPoint, $num);
-                                
-                                Log::info('📥 AFIP RESPONSE RECEIVED', [
-                                    'found' => $afipData['found'] ?? false,
-                                    'doc_number_raw' => $afipData['doc_number'] ?? 'NULL',
-                                    'cae' => $afipData['cae'] ?? 'NULL',
-                                    'issue_date' => $afipData['issue_date'] ?? 'NULL',
-                                ]);
-                                
-                                if (!$afipData['found']) continue;
-
-                                $issueDate = \Carbon\Carbon::parse($afipData['issue_date']);
-
-                                // Skip if invoice is outside date range
-                                if ($issueDate->lt($dateFrom) || $issueDate->gt($dateTo)) continue;
-
-                                $formattedNumber = sprintf('%04d-%08d', $salesPoint, $num);
-
-                                $key = "{$invoiceType}-{$salesPoint}-{$num}";
-                                $exists = isset($existingInvoices[$key]);
-
-                                if (!$exists) {
-                                    $receiverCompanyId = null;
-                                    $clientId = null;
-                                    $receiverName = null;
-                                    $receiverDocument = null;
-                                    
-                                    if (isset($afipData['doc_number']) && $afipData['doc_number'] !== '0') {
-                                        // AFIP devuelve CUIT sin guiones (20123456789)
-                                        $normalizedCuit = $this->normalizeCuit($afipData['doc_number']);
-                                        $receiverDocument = $this->formatCuitWithHyphens($normalizedCuit);
-                                        
-                                        Log::info('Processing CUIT from AFIP (bulk)', [
-                                            'afip_raw' => $afipData['doc_number'],
-                                            'normalized' => $normalizedCuit,
-                                            'formatted' => $receiverDocument,
-                                        ]);
-                                        
-                                        // 1. PRIORIZAR empresa conectada
-                                        $receiverCompany = $this->findConnectedCompanyByCuit($company->id, $normalizedCuit);
-                                        
-                                        if ($receiverCompany) {
-                                            $receiverCompanyId = $receiverCompany->id;
-                                            $receiverName = $receiverCompany->name;
-                                        } else {
-                                            // 2. Buscar cliente externo (incluir archivados)
-                                            $client = \App\Models\Client::withTrashed()
-                                                ->where('company_id', $company->id)
-                                                ->whereRaw('REPLACE(document_number, "-", "") = ?', [$normalizedCuit])
-                                                ->first();
-                                            
-                                            if (!$client) {
-                                                $client = \App\Models\Client::create([
-                                                    'company_id' => $company->id,
-                                                    'document_number' => $receiverDocument,
-                                                    'business_name' => 'Cliente AFIP - ' . $receiverDocument,
-                                                    'document_type' => 'CUIT',
-                                                    'tax_condition' => 'monotax',
-                                                    'address' => null,
-                                                    'incomplete_data' => true,
-                                                ]);
-                                                $client->delete(); // Archivar inmediatamente
-                                                $autoCreatedClientsCount++;
-                                            }
-                                            
-                                            $clientId = $client->id;
-                                            $receiverName = $client->business_name;
-                                        }
-                                    }
-
-                                    // Verificar si se creó cliente automáticamente
-                                    $needsReview = false;
-                                    if ($clientId) {
-                                        $clientCreated = \App\Models\Client::withTrashed()
-                                            ->where('id', $clientId)
-                                            ->whereNotNull('deleted_at')
-                                            ->exists();
-                                        if ($clientCreated) {
-                                            $needsReview = true;
-                                        }
-                                    }
-                                    
-                                    // AFIP no devuelve el concepto - usar default 'products'
-                                    $concept = 'products';
-                                    
-                                    $invoice = Invoice::create([
-                                        'number' => $formattedNumber,
-                                        'type' => $invoiceType,
-                                        'sales_point' => $salesPoint,
-                                        'voucher_number' => $num,
-                                        'concept' => $concept,
-                                        'issuer_company_id' => $company->id,
-                                        'receiver_company_id' => $receiverCompanyId,
-                                        'client_id' => $clientId,
-                                        'issue_date' => $afipData['issue_date'],
-                                        'due_date' => \Carbon\Carbon::parse($afipData['issue_date'])->addDays(30),
-                                        'subtotal' => $afipData['subtotal'],
-                                        'total_taxes' => $afipData['total_taxes'],
-                                        'total_perceptions' => $afipData['total_perceptions'],
-                                        'total' => $afipData['total'],
-                                        'currency' => $afipData['currency'],
-                                        'exchange_rate' => $afipData['exchange_rate'],
-                                        'status' => 'issued',
-                                        'afip_status' => 'approved',
-                                        'afip_cae' => $afipData['cae'],
-                                        'afip_cae_due_date' => $afipData['cae_expiration'],
-                                        'receiver_name' => $receiverName,
-                                        'receiver_document' => $receiverDocument,
-                                        'needs_review' => $needsReview,
-                                        'synced_from_afip' => true,
-                                        'created_by' => auth()->id(),
-                                    ]);
-                                    
-                                    // Crear item genérico ya que AFIP no devuelve detalle
-                                    $invoice->items()->create([
-                                        'description' => 'Productos/Servicios',
-                                        'quantity' => 1,
-                                        'unit_price' => $afipData['subtotal'],
-                                        'discount_percentage' => 0,
-                                        'tax_rate' => $afipData['subtotal'] > 0 ? ($afipData['total_taxes'] / $afipData['subtotal']) * 100 : 0,
-                                        'tax_amount' => $afipData['total_taxes'],
-                                        'subtotal' => $afipData['subtotal'],
-                                        'order_index' => 0,
-                                    ]);
-                                }
-
-                                $imported[] = [
-                                    'sales_point' => $salesPoint,
-                                    'type' => $type,
-                                    'number' => $num,
-                                    'formatted_number' => $formattedNumber,
-                                    'saved' => !$exists,
-                                ];
-                            } catch (\Exception $e) {
-                                // Skip failed invoice silently
-                            }
-                        }
-                    } catch (\Exception $e) {
-                        // Skip failed sales point
-                    }
-                }
-            }
-
-            $message = 'Sincronización completada.';
-            if ($autoCreatedClientsCount > 0) {
-                $message .= " ⚠️ Se crearon automáticamente {$autoCreatedClientsCount} cliente(s) archivado(s) desde AFIP. Debes completar sus datos en la sección 'Clientes Archivados' antes de poder emitirles facturas. Estos clientes tienen solo el CUIT y necesitan nombre, email y otros datos.";
-            }
-            
-            return response()->json([
-                'success' => true,
-                'imported_count' => count($imported),
-                'auto_created_clients' => $autoCreatedClientsCount,
-                'summary' => $summary,
-                'invoices' => $imported,
-                'date_from' => $dateFrom->format('Y-m-d'),
-                'date_to' => $dateTo->format('Y-m-d'),
-                'message' => $message,
-            ]);
-        } catch (\Exception $e) {
-            \Log::error('Sync by date range failed completely', [
-                'company_id' => $company->id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Error al sincronizar: ' . $e->getMessage(),
-            ], 500);
-        }
-    }
+    // syncSingleInvoice and syncByDateRange moved to InvoiceSyncService
 
     private function getAfipInvoiceTypeCode(string $type): int
     {
@@ -1334,61 +585,12 @@ class InvoiceController extends Controller
         return $types[$type] ?? 6;
     }
 
-    public function storeManualIssued(Request $request, $companyId)
+    public function storeManualIssued(StoreManualIssuedInvoiceRequest $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('create', [Invoice::class, $company]);
         
-        $validated = $request->validate([
-            'client_id' => 'required_without_all:receiver_company_id,client_name,related_invoice_id|exists:clients,id',
-            'receiver_company_id' => 'required_without_all:client_id,client_name,related_invoice_id|exists:companies,id',
-            'client_name' => 'required_without_all:client_id,receiver_company_id,related_invoice_id|string|max:200',
-            'client_document' => 'required_with:client_name|string|max:20',
-            'related_invoice_id' => 'nullable|exists:invoices,id',
-            'invoice_type' => 'required|string',
-            'invoice_number' => 'nullable|string|max:50',
-            'number' => 'nullable|string|max:50',
-            'voucher_number' => 'nullable|max:50',
-            'sales_point' => 'nullable|integer|min:1|max:9999',
-            'concept' => 'nullable|in:products,services,products_services',
-            'issue_date' => 'required|date',
-            'due_date' => 'required|date|after_or_equal:issue_date|before:2031-01-01',
-            'currency' => 'required|string|size:3',
-            'exchange_rate' => 'nullable|numeric|min:0',
-            'notes' => 'nullable|string|max:500',
-            'items' => 'required|array|min:1',
-            'items.*.description' => 'required|string|max:200',
-            'items.*.quantity' => 'required|numeric|min:0.01',
-            'items.*.unit_price' => 'required|numeric|min:0',
-            'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
-            'items.*.tax_rate' => 'nullable|numeric|min:-2|max:100',
-            'cae' => 'nullable|string|size:14|regex:/^[0-9]{14}$/',
-            'cae_due_date' => 'nullable|date|required_with:cae',
-            'service_date_from' => 'nullable|date|required_if:concept,services,products_services',
-            'service_date_to' => 'nullable|date|after_or_equal:service_date_from|required_if:concept,services,products_services',
-        ], [
-            'client_name.required_without_all' => 'El nombre del cliente es obligatorio cuando no se selecciona un cliente o empresa existente.',
-            'client_document.required_without_all' => 'El documento del cliente es obligatorio cuando no se selecciona un cliente o empresa existente.',
-            'invoice_type.required' => 'El tipo de factura es obligatorio.',
-            'issue_date.required' => 'La fecha de emisión es obligatoria.',
-            'issue_date.date' => 'La fecha de emisión debe tener un formato válido (AAAA-MM-DD). Verifique que el día, mes y año sean correctos.',
-            'due_date.required' => 'La fecha de vencimiento es obligatoria.',
-            'due_date.date' => 'La fecha de vencimiento debe tener un formato válido (AAAA-MM-DD). Verifique que el día, mes y año sean correctos.',
-            'due_date.after_or_equal' => 'La fecha de vencimiento debe ser igual o posterior a la fecha de emisión.',
-            'due_date.before' => 'La fecha de vencimiento no puede ser posterior al año 2030. Seleccione una fecha hasta el 31/12/2030.',
-            'cae.size' => 'El CAE debe tener exactamente 14 dígitos.',
-            'cae.regex' => 'El CAE debe contener solo números (14 dígitos).',
-            'cae_due_date.date' => 'La fecha de vencimiento del CAE debe tener un formato válido (AAAA-MM-DD).',
-            'cae_due_date.required_with' => 'La fecha de vencimiento del CAE es obligatoria cuando se ingresa el número de CAE.',
-            'service_date_from.required_if' => 'La fecha de inicio del servicio es obligatoria para servicios.',
-            'service_date_to.required_if' => 'La fecha de fin del servicio es obligatoria para servicios.',
-            'service_date_to.after_or_equal' => 'La fecha de fin del servicio debe ser igual o posterior a la fecha de inicio.',
-            'currency.required' => 'La moneda es obligatoria.',
-            'items.required' => 'Debe agregar al menos un ítem.',
-            'items.*.description.required' => 'La descripción del ítem es obligatoria.',
-            'items.*.quantity.required' => 'La cantidad es obligatoria.',
-            'items.*.unit_price.required' => 'El precio unitario es obligatorio.',
-        ]);
+        $validated = $request->validated();
 
         try {
             DB::beginTransaction();
@@ -1642,7 +844,7 @@ class InvoiceController extends Controller
 
             // Si es NC/ND, actualizar factura relacionada
             if (isset($validated['related_invoice_id'])) {
-                $this->updateRelatedInvoiceBalance($validated['related_invoice_id']);
+                $this->invoiceService->updateRelatedInvoiceBalance($validated['related_invoice_id']);
             }
             
             DB::commit();
@@ -1679,7 +881,7 @@ class InvoiceController extends Controller
         }
     }
 
-    public function storeManualReceived(Request $request, $companyId)
+    public function storeManualReceived(StoreManualReceivedInvoiceRequest $request, $companyId)
     {
         try {
             Log::info('=== storeManualReceived START ===', [
@@ -1872,6 +1074,9 @@ class InvoiceController extends Controller
                     }
                     // PRIORIDAD 3: Si tiene issuerCompany, crear proveedor desde ahí
                     elseif ($relatedInvoice->issuerCompany) {
+                        $relatedInvoice->issuerCompany->load(['primaryBankAccount', 'bankAccounts']);
+                        $primaryBankAccount = $relatedInvoice->issuerCompany->primaryBankAccount ?? $relatedInvoice->issuerCompany->bankAccounts->first();
+                        
                         $supplierName = $relatedInvoice->issuerCompany->name;
                         $supplierDocument = $relatedInvoice->issuerCompany->national_id;
                         $supplier = \App\Models\Supplier::firstOrCreate(
@@ -1883,8 +1088,24 @@ class InvoiceController extends Controller
                                 'document_type' => 'CUIT',
                                 'business_name' => $supplierName,
                                 'tax_condition' => $relatedInvoice->issuerCompany->tax_condition ?? 'registered_taxpayer',
+                                // Copy bank account data
+                                'bank_name' => $primaryBankAccount->bank_name ?? null,
+                                'bank_cbu' => $primaryBankAccount->cbu ?? $relatedInvoice->issuerCompany->cbu ?? null,
+                                'bank_account_type' => $primaryBankAccount->account_type ?? null,
+                                'bank_alias' => $primaryBankAccount->alias ?? null,
                             ]
                         );
+                        
+                        // Update bank data if supplier already existed
+                        if (!$supplier->wasRecentlyCreated && 
+                            (empty($supplier->bank_cbu) || empty($supplier->bank_account_number))) {
+                            $supplier->bank_name = $primaryBankAccount->bank_name ?? $supplier->bank_name;
+                            $supplier->bank_cbu = $primaryBankAccount->cbu ?? $relatedInvoice->issuerCompany->cbu ?? $supplier->bank_cbu;
+                            $supplier->bank_account_type = $primaryBankAccount->account_type ?? $supplier->bank_account_type;
+                            $supplier->bank_alias = $primaryBankAccount->alias ?? $supplier->bank_alias;
+                            $supplier->save();
+                        }
+                        
                         $supplierId = $supplier->id;
                     }
                     
@@ -1903,13 +1124,17 @@ class InvoiceController extends Controller
                 $supplierDocument = $supplier->document_number;
             } elseif (!empty($validated['issuer_company_id'])) {
                 // Si seleccionó empresa conectada, crear proveedor automáticamente
-                $issuerCompany = Company::findOrFail($validated['issuer_company_id']);
+                $issuerCompany = Company::with(['primaryBankAccount', 'bankAccounts', 'address'])->findOrFail($validated['issuer_company_id']);
                 $supplierName = $issuerCompany->name;
                 $supplierDocument = $issuerCompany->national_id;
+                
+                // Get bank account data
+                $primaryBankAccount = $issuerCompany->primaryBankAccount ?? $issuerCompany->bankAccounts->first();
                 
                 Log::info('Creating/finding supplier from connected company', [
                     'company_name' => $supplierName,
                     'document' => $supplierDocument,
+                    'has_bank_account' => $primaryBankAccount ? 'yes' : 'no',
                 ]);
                 
                 $supplier = \App\Models\Supplier::firstOrCreate(
@@ -1927,13 +1152,34 @@ class InvoiceController extends Controller
                         'city' => $issuerCompany->address->city ?? null,
                         'province' => $issuerCompany->address->province ?? null,
                         'postal_code' => $issuerCompany->address->postal_code ?? null,
+                        // Copy bank account data
+                        'bank_name' => $primaryBankAccount->bank_name ?? null,
+                        'bank_cbu' => $primaryBankAccount->cbu ?? $issuerCompany->cbu ?? null,
+                        'bank_account_type' => $primaryBankAccount->account_type ?? null,
+                        'bank_alias' => $primaryBankAccount->alias ?? null,
                     ]
                 );
+                
+                // Update bank data if supplier already existed but bank data is missing
+                if (!$supplier->wasRecentlyCreated && 
+                    (empty($supplier->bank_cbu) || empty($supplier->bank_account_number))) {
+                    $supplier->bank_name = $primaryBankAccount->bank_name ?? $supplier->bank_name;
+                    $supplier->bank_cbu = $primaryBankAccount->cbu ?? $issuerCompany->cbu ?? $supplier->bank_cbu;
+                    $supplier->bank_account_type = $primaryBankAccount->account_type ?? $supplier->bank_account_type;
+                    $supplier->bank_alias = $primaryBankAccount->alias ?? $supplier->bank_alias;
+                    $supplier->save();
+                    
+                    Log::info('Updated supplier bank data from connected company', [
+                        'supplier_id' => $supplier->id,
+                    ]);
+                }
+                
                 $supplierId = $supplier->id;
                 
                 Log::info('Supplier created/found', [
                     'supplier_id' => $supplierId,
                     'supplier_name' => $supplier->business_name,
+                    'has_bank_data' => !empty($supplier->bank_cbu) || !empty($supplier->bank_account_number),
                 ]);
             } else {
                 // Manual supplier data
@@ -2053,7 +1299,7 @@ class InvoiceController extends Controller
 
             // Si es NC/ND, actualizar factura relacionada
             if (isset($validated['related_invoice_id'])) {
-                $this->updateRelatedInvoiceBalance($validated['related_invoice_id']);
+                $this->invoiceService->updateRelatedInvoiceBalance($validated['related_invoice_id']);
             }
             
             } catch (\Illuminate\Database\QueryException $e) {
@@ -2382,7 +1628,7 @@ class InvoiceController extends Controller
         }
     }
 
-    public function updateSyncedInvoice(Request $request, $companyId, $id)
+    public function updateSyncedInvoice(UpdateSyncedInvoiceRequest $request, $companyId, $id)
     {
         $invoice = Invoice::where('issuer_company_id', $companyId)->findOrFail($id);
         $this->authorize('update', $invoice);
@@ -2393,15 +1639,7 @@ class InvoiceController extends Controller
             ], 422);
         }
 
-        $validated = $request->validate([
-            'concept' => 'required|in:products,services,products_services',
-            'service_date_from' => 'nullable|date',
-            'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
-            'items' => 'required|array',
-            'items.*.description' => 'required|string|max:200',
-        ], [
-            'service_date_to.after_or_equal' => 'La fecha de fin del servicio debe ser igual o posterior a la fecha de inicio',
-        ]);
+        $validated = $request->validated();
 
         // Solo actualizar campos descriptivos
         // Si el concepto es 'products', forzar fechas de servicio a null
@@ -2428,13 +1666,9 @@ class InvoiceController extends Controller
         ]);
     }
 
-    public function downloadBulk(Request $request, $companyId)
+    public function downloadBulk(DownloadBulkRequest $request, $companyId)
     {
-        $validated = $request->validate([
-            'invoice_ids' => 'required|array|min:1|max:50',
-            'invoice_ids.*' => 'required|exists:invoices,id',
-            'format' => 'required|in:pdf,txt',
-        ]);
+        $validated = $request->validated();
 
         try {
             $invoices = Invoice::with([
@@ -2523,16 +1757,13 @@ class InvoiceController extends Controller
     /**
      * Get next available invoice number from AFIP
      */
-    public function getNextNumber(Request $request, $companyId)
+    public function getNextNumber(GetNextNumberRequest $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         
         $this->authorize('create', [Invoice::class, $company]);
 
-        $validated = $request->validate([
-            'sales_point' => 'required|integer|min:1|max:9999',
-            'invoice_type' => 'required|string',
-        ]);
+        $validated = $request->validated();
 
         try {
             $afipService = new AfipInvoiceService($company);
@@ -2585,84 +1816,14 @@ class InvoiceController extends Controller
         return 'net';
     }
 
-    private function getAuthorizedSalesPoints($company): array
-    {
-        try {
-            $client = new \App\Services\Afip\AfipWebServiceClient($company->afipCertificate);
-            $salesPoints = $client->getSalesPoints();
-            
-            // Filtrar solo puntos activos (no bloqueados y sin fecha de baja)
-            $activePoints = array_filter($salesPoints, function($sp) {
-                return !$sp['blocked'] && empty($sp['drop_date']);
-            });
-            
-            $numbers = array_map(fn($sp) => $sp['point_number'], $activePoints);
-            
-            Log::info('Retrieved authorized sales points from AFIP', [
-                'company_id' => $company->id,
-                'points' => $numbers,
-            ]);
-            
-            return !empty($numbers) ? $numbers : range(1, 10);
-        } catch (\Exception $e) {
-            Log::warning('Could not get sales points from AFIP, using fallback', [
-                'error' => $e->getMessage()
-            ]);
-            return range(1, 10);
-        }
-    }
-
-    /**
-     * Find connected company by CUIT (only companies connected to the current company)
-     */
-    private function findConnectedCompanyByCuit(string $companyId, string $normalizedCuit): ?Company
-    {
-        // Get all connected company IDs
-        $connectedCompanyIds = \App\Models\CompanyConnection::where(function($query) use ($companyId) {
-            $query->where('company_id', $companyId)
-                  ->orWhere('connected_company_id', $companyId);
-        })
-        ->where('status', 'connected')
-        ->get()
-        ->map(function($connection) use ($companyId) {
-            return $connection->company_id === $companyId 
-                ? $connection->connected_company_id 
-                : $connection->company_id;
-        })
-        ->unique()
-        ->values();
-
-        // Search only among connected companies
-        return Company::whereIn('id', $connectedCompanyIds)
-            ->whereRaw('REPLACE(national_id, "-", "") = ?', [$normalizedCuit])
-            ->first();
-    }
-
-    /**
-     * Format CUIT with hyphens (XX-XXXXXXXX-X)
-     */
-    private function formatCuitWithHyphens(string $cuit): string
-    {
-        // Remove existing hyphens
-        $cleanCuit = str_replace('-', '', $cuit);
-        
-        // Add hyphens if CUIT has 11 digits
-        if (strlen($cleanCuit) === 11 && ctype_digit($cleanCuit)) {
-            return substr($cleanCuit, 0, 2) . '-' . substr($cleanCuit, 2, 8) . '-' . substr($cleanCuit, 10, 1);
-        }
-        
-        // Return as-is if not a valid 11-digit CUIT
-        return $cuit;
-    }
+    // getAuthorizedSalesPoints, findConnectedCompanyByCuit, formatCuitWithHyphens moved to services
     
     /**
      * Get invoices that can be associated with NC/ND for /emit-invoice
      */
-    public function getAssociableInvoicesForEmit(Request $request, $companyId)
+    public function getAssociableInvoicesForEmit(GetAssociableInvoicesRequest $request, $companyId)
     {
-        $validated = $request->validate([
-            'invoice_type' => 'required|string',
-        ]);
+        $validated = $request->validated();
         
         $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
         $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
@@ -2672,16 +1833,27 @@ class InvoiceController extends Controller
             return response()->json(['invoices' => []]);
         }
         
+        // Get compatible invoice types (e.g., NCA -> ['A'], NCB -> ['B'])
+        $voucherTypes = \App\Services\VoucherTypeService::getVoucherTypes();
+        $compatibleTypes = $voucherTypes[$invoiceType]['compatible_with'] ?? [];
+        
+        if (empty($compatibleTypes)) {
+            return response()->json(['invoices' => []]);
+        }
+        
         // Facturas emitidas a través de AFIP (con CAE): incluye emitidas desde el sistema Y sincronizadas de AFIP
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->where('afip_status', 'approved')
             ->whereNotNull('afip_cae')
-            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->whereIn('type', $compatibleTypes) // Filter by compatible types
             ->where('status', '!=', 'cancelled')
-            ->with(['client', 'receiverCompany'])
+            ->with(['client', 'receiverCompany', 'collections'])
             ->orderBy('issue_date', 'desc')
             ->get()
-            ->map(function($inv) {
+            ->map(function($inv) use ($companyId) {
+                // Calculate available_balance (balance_pending)
+                $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
+                
                 $origin = $inv->synced_from_afip ? 'Sincronizada AFIP' : 'Emitida desde sistema';
                 $statusLabel = match($inv->status) {
                     'issued' => 'Emitida',
@@ -2697,6 +1869,9 @@ class InvoiceController extends Controller
                     'type' => $inv->type,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
+                    'available_balance' => $availableBalance,
+                    'balance_pending' => $availableBalance, // Alias for compatibility
+                    'currency' => $inv->currency ?? 'ARS',
                     'receiver_name' => $inv->receiver_name ?? $inv->receiverCompany?->name ?? $inv->client?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -2712,13 +1887,9 @@ class InvoiceController extends Controller
     /**
      * Get invoices that can be associated with NC/ND for /load-invoice received
      */
-    public function getAssociableInvoicesForReceived(Request $request, $companyId)
+    public function getAssociableInvoicesForReceived(GetAssociableInvoicesRequest $request, $companyId)
     {
-        $validated = $request->validate([
-            'invoice_type' => 'required|string',
-            'supplier_id' => 'nullable|exists:suppliers,id',
-            'issuer_document' => 'nullable|string',
-        ]);
+        $validated = $request->validated();
         
         $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
         $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
@@ -2728,9 +1899,17 @@ class InvoiceController extends Controller
             return response()->json(['invoices' => []]);
         }
         
+        // Get compatible invoice types (e.g., NCA -> ['A'], NCB -> ['B'])
+        $voucherTypes = \App\Services\VoucherTypeService::getVoucherTypes();
+        $compatibleTypes = $voucherTypes[$invoiceType]['compatible_with'] ?? [];
+        
+        if (empty($compatibleTypes)) {
+            return response()->json(['invoices' => []]);
+        }
+        
         // Facturas recibidas de ese mismo proveedor
         $query = Invoice::where('receiver_company_id', $companyId)
-            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->whereIn('type', $compatibleTypes) // Filter by compatible types
             ->where('status', '!=', 'cancelled');
         
         if (!empty($validated['supplier_id'])) {
@@ -2742,7 +1921,10 @@ class InvoiceController extends Controller
         $invoices = $query->with(['supplier'])
             ->orderBy('issue_date', 'desc')
             ->get()
-            ->map(function($inv) {
+            ->map(function($inv) use ($companyId) {
+                // Calculate available_balance (balance_pending)
+                $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
+                
                 $origin = $inv->is_manual_load ? 'Cargada manualmente' : 'Recibida automática';
                 $statusLabel = match($inv->status) {
                     'pending_approval' => 'Pendiente aprobación',
@@ -2758,6 +1940,9 @@ class InvoiceController extends Controller
                     'type' => $inv->type,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
+                    'available_balance' => $availableBalance,
+                    'balance_pending' => $availableBalance, // Alias for compatibility
+                    'currency' => $inv->currency ?? 'ARS',
                     'issuer_name' => $inv->issuer_name ?? $inv->supplier?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -2773,13 +1958,9 @@ class InvoiceController extends Controller
     /**
      * Get invoices that can be associated with NC/ND for /load-invoice issued
      */
-    public function getAssociableInvoicesForIssued(Request $request, $companyId)
+    public function getAssociableInvoicesForIssued(GetAssociableInvoicesRequest $request, $companyId)
     {
-        $validated = $request->validate([
-            'invoice_type' => 'required|string',
-            'client_id' => 'nullable|exists:clients,id',
-            'receiver_document' => 'nullable|string',
-        ]);
+        $validated = $request->validated();
         
         $invoiceType = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
         $isNC = in_array($invoiceType, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
@@ -2789,10 +1970,18 @@ class InvoiceController extends Controller
             return response()->json(['invoices' => []]);
         }
         
+        // Get compatible invoice types (e.g., NCA -> ['A'], NCB -> ['B'])
+        $voucherTypes = \App\Services\VoucherTypeService::getVoucherTypes();
+        $compatibleTypes = $voucherTypes[$invoiceType]['compatible_with'] ?? [];
+        
+        if (empty($compatibleTypes)) {
+            return response()->json(['invoices' => []]);
+        }
+        
         // Facturas emitidas manualmente hacia ese mismo cliente
         $query = Invoice::where('issuer_company_id', $companyId)
             ->where('is_manual_load', true)
-            ->whereIn('type', ['A', 'B', 'C', 'M', 'E'])
+            ->whereIn('type', $compatibleTypes) // Filter by compatible types
             ->where('status', '!=', 'cancelled');
         
         if (!empty($validated['client_id'])) {
@@ -2804,7 +1993,10 @@ class InvoiceController extends Controller
         $invoices = $query->with(['client'])
             ->orderBy('issue_date', 'desc')
             ->get()
-            ->map(function($inv) {
+            ->map(function($inv) use ($companyId) {
+                // Calculate available_balance (balance_pending)
+                $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
+                
                 $origin = 'Cargada manualmente';
                 $statusLabel = match($inv->status) {
                     'issued' => 'Emitida',
@@ -2820,6 +2012,9 @@ class InvoiceController extends Controller
                     'type' => $inv->type,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
+                    'available_balance' => $availableBalance,
+                    'balance_pending' => $availableBalance, // Alias for compatibility
+                    'currency' => $inv->currency ?? 'ARS',
                     'receiver_name' => $inv->receiver_name ?? $inv->client?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -2830,6 +2025,60 @@ class InvoiceController extends Controller
             });
         
         return response()->json(['invoices' => $invoices]);
+    }
+
+    /**
+     * Calculate available balance for an invoice (considering NC/ND and collections/payments)
+     */
+    private function calculateAvailableBalance(Invoice $invoice, string $companyId): float
+    {
+        // Always recalculate to ensure accuracy (balance_pending might be stale)
+        // Calculate total NC (credit notes) associated with this invoice
+        $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Calculate total ND (debit notes) associated with this invoice
+        $totalND = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->sum('total');
+        
+        // Determine if invoice is issued (by this company) or received
+        $isIssued = (string)$invoice->issuer_company_id === (string)$companyId;
+        
+        // Calculate confirmed collections (for issued invoices)
+        $totalCollections = 0;
+        if ($isIssued) {
+            if ($invoice->collections && $invoice->collections->isNotEmpty()) {
+                $totalCollections = $invoice->collections
+                    ->where('company_id', $companyId)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+            } else {
+                // Fallback to query if relation not loaded
+                $totalCollections = \App\Models\Collection::where('invoice_id', $invoice->id)
+                    ->where('company_id', $companyId)
+                    ->where('status', 'confirmed')
+                    ->sum('amount');
+            }
+        }
+        
+        // Calculate confirmed payments (for received invoices)
+        $totalPayments = 0;
+        if (!$isIssued) {
+            $totalPayments = DB::table('invoice_payments_tracking')
+                ->where('invoice_id', $invoice->id)
+                ->where('company_id', $companyId)
+                ->whereIn('status', ['confirmed', 'in_process'])
+                ->sum('amount');
+        }
+        
+        // Balance = Total + ND - NC - Collections - Payments
+        $balance = ($invoice->total ?? 0) + $totalND - $totalNC - $totalCollections - $totalPayments;
+        
+        return round(max(0, $balance), 2); // Ensure non-negative
     }
 
     /**
