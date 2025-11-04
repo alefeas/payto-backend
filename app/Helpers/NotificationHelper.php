@@ -2,6 +2,9 @@
 
 namespace App\Helpers;
 
+use App\Models\Invoice;
+use App\Models\Payment;
+use App\Models\CompanyConnection;
 use App\Services\NotificationService;
 
 class NotificationHelper
@@ -73,17 +76,18 @@ class NotificationHelper
     {
         $service = app(NotificationService::class);
         
-        $payerName = $payment->payerCompany->business_name ?? 'Cliente';
+        // Get the payer company name from the invoice issuer
+        $payerName = $payment->invoice->issuerCompany->business_name ?? 'Cliente';
         
         $service->createForCompanyMembers(
-            $payment->payer_company_id,
+            $payment->invoice->issuer_company_id, // The company that issued the invoice (payer)
             'payment_received',
             'Nuevo pago recibido',
-            "{$payerName} declaró un pago de $" . number_format($payment->net_amount, 2),
+            "{$payerName} declaró un pago de $" . number_format($payment->amount, 2),
             [
                 'entityType' => 'payment',
                 'entityId' => $payment->id,
-                'amount' => $payment->net_amount,
+                'amount' => $payment->amount,
                 'fromCompany' => $payerName,
             ],
             $excludeUserId
@@ -108,6 +112,210 @@ class NotificationHelper
                 'entityType' => 'connection',
                 'entityId' => $connection->id,
                 'fromCompany' => $requesterName,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when invoice status changes
+     */
+    public static function notifyInvoiceStatusChanged(Invoice $invoice, string $oldStatus, string $newStatus, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $statusMessages = [
+            'approved' => 'aprobada',
+            'rejected' => 'rechazada',
+            'paid' => 'pagada',
+            'partially_paid' => 'pagada parcialmente',
+            'cancelled' => 'cancelada',
+            'dispute' => 'en disputa',
+            'needs_review' => 'requiere revisión',
+        ];
+
+        $statusMessage = $statusMessages[$newStatus] ?? $newStatus;
+        
+        $service->createForCompanyMembers(
+            $invoice->issuer_company_id,
+            'invoice_status_changed',
+            'Estado de factura actualizado',
+            "La factura {$invoice->number} ha sido {$statusMessage}",
+            [
+                'entityType' => 'invoice',
+                'entityId' => $invoice->id,
+                'oldStatus' => $oldStatus,
+                'newStatus' => $newStatus,
+                'amount' => $invoice->total,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when payment status changes
+     */
+    public static function notifyPaymentStatusChanged(Payment $payment, string $oldStatus, string $newStatus, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $statusMessages = [
+            'confirmed' => 'confirmado',
+            'rejected' => 'rechazado',
+            'pending' => 'pendiente',
+            'cancelled' => 'cancelado',
+        ];
+
+        $statusMessage = $statusMessages[$newStatus] ?? $newStatus;
+        
+        $service->createForCompanyMembers(
+            $payment->company_id,
+            'payment_status_changed',
+            'Estado de pago actualizado',
+            "El pago por $" . number_format($payment->amount, 2) . " ha sido {$statusMessage}",
+            [
+                'entityType' => 'payment',
+                'entityId' => $payment->id,
+                'oldStatus' => $oldStatus,
+                'newStatus' => $newStatus,
+                'amount' => $payment->amount,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when invoice is due soon
+     */
+    public static function notifyInvoiceDueSoon(Invoice $invoice, int $daysUntilDue, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $title = $daysUntilDue === 1 ? 'Factura vence mañana' : "Factura vence en {$daysUntilDue} días";
+        $message = "La factura {$invoice->number} vence el {$invoice->due_date->format('d/m/Y')}";
+        
+        $service->createForCompanyMembers(
+            $invoice->issuer_company_id,
+            'invoice_due_soon',
+            $title,
+            $message,
+            [
+                'entityType' => 'invoice',
+                'entityId' => $invoice->id,
+                'dueDate' => $invoice->due_date->format('Y-m-d'),
+                'daysUntilDue' => $daysUntilDue,
+                'amount' => $invoice->balance_pending,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when invoice is overdue
+     */
+    public static function notifyInvoiceOverdue(Invoice $invoice, int $daysOverdue, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $title = 'Factura vencida';
+        $message = "La factura {$invoice->number} está vencida hace {$daysOverdue} días";
+        
+        $service->createForCompanyMembers(
+            $invoice->issuer_company_id,
+            'invoice_overdue',
+            $title,
+            $message,
+            [
+                'entityType' => 'invoice',
+                'entityId' => $invoice->id,
+                'dueDate' => $invoice->due_date->format('Y-m-d'),
+                'daysOverdue' => $daysOverdue,
+                'amount' => $invoice->balance_pending,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when connection request is accepted
+     */
+    public static function notifyConnectionAccepted(CompanyConnection $connection, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $connectedName = $connection->connectedCompany->business_name ?? 'Empresa';
+        
+        $service->createForCompanyMembers(
+            $connection->company_id,
+            'connection_accepted',
+            'Conexión aceptada',
+            "{$connectedName} aceptó tu solicitud de conexión",
+            [
+                'entityType' => 'connection',
+                'entityId' => $connection->id,
+                'connectedCompany' => $connectedName,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when connection request is rejected
+     */
+    public static function notifyConnectionRejected(CompanyConnection $connection, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $connectedName = $connection->connectedCompany->business_name ?? 'Empresa';
+        
+        $service->createForCompanyMembers(
+            $connection->company_id,
+            'connection_rejected',
+            'Conexión rechazada',
+            "{$connectedName} rechazó tu solicitud de conexión",
+            [
+                'entityType' => 'connection',
+                'entityId' => $connection->id,
+                'connectedCompany' => $connectedName,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify system alert
+     */
+    public static function notifySystemAlert(string $companyId, string $title, string $message, array $data = [], $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $service->createForCompanyMembers(
+            $companyId,
+            'system_alert',
+            $title,
+            $message,
+            $data,
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when invoice needs review
+     */
+    public static function notifyInvoiceNeedsReview(Invoice $invoice, string $reason, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $service->createForCompanyMembers(
+            $invoice->issuer_company_id,
+            'invoice_needs_review',
+            'Factura requiere revisión',
+            "La factura {$invoice->number} requiere revisión: {$reason}",
+            [
+                'entityType' => 'invoice',
+                'entityId' => $invoice->id,
+                'reason' => $reason,
+                'amount' => $invoice->total,
             ],
             $excludeUserId
         );
