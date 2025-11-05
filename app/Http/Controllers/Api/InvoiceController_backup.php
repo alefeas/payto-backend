@@ -151,7 +151,12 @@ class InvoiceController extends Controller
             $invoice->pending_amount = $total - $paidAmount;
             
             if ($paidAmount >= $total) {
-                $invoice->payment_status = 'paid';
+                // Set payment status based on invoice direction (operation type)
+                if ($invoice->direction === 'issued') {
+                    $invoice->payment_status = 'collected'; // Cobrada
+                } else {
+                    $invoice->payment_status = 'paid'; // Pagada
+                }
             } elseif ($paidAmount > 0) {
                 $invoice->payment_status = 'partial';
             } else {
