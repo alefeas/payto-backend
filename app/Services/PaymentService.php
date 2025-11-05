@@ -52,6 +52,21 @@ class PaymentService
                 $this->applyAutoRetentions($payment, $company, $invoice);
             }
             
+            // Auditoría empresa: pago registrado
+            app(\App\Services\AuditService::class)->log(
+                (string) $company->id,
+                (string) (auth()->id() ?? ''),
+                'payment.registered',
+                'Pago registrado',
+                'Payment',
+                (string) $payment->id,
+                [
+                    'invoice_id' => (string) $invoice->id,
+                    'amount' => $data['amount'],
+                    'method' => $data['payment_method'],
+                ]
+            );
+
             // Actualizar estado de la factura
             $this->updateInvoiceStatus($invoice, $company);
             
@@ -137,8 +152,18 @@ class PaymentService
             
             // Eliminar el pago
             $deleted = $payment->delete();
-            
+
             if ($deleted) {
+                // Auditoría empresa: pago eliminado
+                app(\App\Services\AuditService::class)->log(
+                    (string) $company->id,
+                    (string) (auth()->id() ?? ''),
+                    'payment.deleted',
+                    'Pago eliminado',
+                    'Payment',
+                    (string) $payment->id,
+                    [ 'invoice_id' => (string) $invoice->id ]
+                );
                 // Recalcular el estado de la factura
                 $this->updateInvoiceStatus($invoice, $company);
             }

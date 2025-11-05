@@ -313,7 +313,12 @@ class InvoiceService
                 'display_status' => $invoice->display_status ?? 'not set yet',
             ]);
         } elseif ($paidAmount >= $adjustedTotal) {
-            $invoice->payment_status = 'paid';
+            // Set payment status based on invoice direction (operation type)
+            if ($invoice->direction === 'issued') {
+                $invoice->payment_status = 'collected'; // Cobrada
+            } else {
+                $invoice->payment_status = 'paid'; // Pagada
+            }
         } elseif ($paidAmount > 0) {
             $invoice->payment_status = 'partial';
         } else {
@@ -349,6 +354,7 @@ class InvoiceService
 
     /**
      * Update related invoice balance when NC/ND is created
+     * Los pagos/cobros NO deben afectar el balance - solo ND/NC
      */
     public function updateRelatedInvoiceBalance(string $relatedInvoiceId): void
     {
@@ -357,7 +363,7 @@ class InvoiceService
             return;
         }
         
-        // RECALCULATE FULL BALANCE: Total + ND - NC - Collections/Payments
+        // RECALCULAR SALDO: Total + ND - NC (SIN incluir pagos/cobros)
         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
@@ -368,18 +374,8 @@ class InvoiceService
             ->where('status', '!=', 'cancelled')
             ->sum('total');
         
-        // Confirmed collections/payments
-        $totalCollections = $relatedInvoice->collections()
-            ->where('status', 'confirmed')
-            ->sum('amount');
-        
-        $totalPayments = DB::table('invoice_payments_tracking')
-            ->where('invoice_id', $relatedInvoice->id)
-            ->whereIn('status', ['confirmed', 'in_process'])
-            ->sum('amount');
-        
-        // Balance = Total + ND - NC - Collections - Payments
-        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC - $totalCollections - $totalPayments;
+        // Saldo = Total + ND - NC (solo ND/NC afectan el balance)
+        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC;
         
         // Round to avoid precision issues
         $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
@@ -390,8 +386,6 @@ class InvoiceService
             'total' => $relatedInvoice->total,
             'total_nc' => $totalNC,
             'total_nd' => $totalND,
-            'total_collections' => $totalCollections,
-            'total_payments' => $totalPayments,
             'balance_pending' => $relatedInvoice->balance_pending,
         ]);
         
