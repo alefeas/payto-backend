@@ -88,71 +88,86 @@ class AfipInvoiceService
     /**
      * Authorize standard voucher (Facturas, NC, ND, Recibos)
      */
-    private function authorizeStandardVoucher(Invoice $invoice): array
-    {
-        try {
-            $soapClient = $this->client->getWSFEClient();
-            $auth = $this->client->getAuthArray();
-            
-            $invoiceType = $this->getAfipInvoiceType($invoice->type);
-            
-            $invoiceData = $this->buildInvoiceData($invoice);
-            
-            Log::info('Sending invoice to AFIP', [
-                'invoice_id' => $invoice->id,
-                'voucher_number' => $invoice->voucher_number,
-                'invoice_type' => $invoiceType,
-                'sales_point' => $invoice->sales_point,
-            ]);
+     private function authorizeStandardVoucher(Invoice $invoice): array
+     {
+         try {
+             $soapClient = $this->client->getWSFEClient();
+             $auth = $this->client->getAuthArray();
+             
+             $invoiceType = $this->getAfipInvoiceType($invoice->type);
+             
+             $invoiceData = $this->buildInvoiceData($invoice);
+             
+             Log::info('Sending invoice to AFIP', [
+                 'invoice_id' => $invoice->id,
+                 'voucher_number' => $invoice->voucher_number,
+                 'invoice_type' => $invoiceType,
+                 'sales_point' => $invoice->sales_point,
+             ]);
 
-            $response = $soapClient->FECAESolicitar([
-                'Auth' => $auth,
-                'FeCAEReq' => $invoiceData,
-            ]);
+             // Calcular Tributos array primero para obtener el total exacto
+             $tributosArray = $this->buildTributosArray($invoice);
+             $totalPerceptions = 0;
+             
+             if ($tributosArray && isset($tributosArray['Tributo'])) {
+                 foreach ($tributosArray['Tributo'] as $tributo) {
+                     $totalPerceptions += $tributo['Importe'];
+                 }
+             }
 
-            $result = $response->FECAESolicitarResult;
+             // Actualizar el invoiceData con el total de percepciones calculado
+             if (isset($invoiceData['FeDetReq']['FECAEDetRequest']['ImpTrib'])) {
+                 $invoiceData['FeDetReq']['FECAEDetRequest']['ImpTrib'] = $totalPerceptions;
+             }
 
-            if (isset($result->Errors) && $result->Errors) {
-                $errors = is_array($result->Errors->Err) ? $result->Errors->Err : [$result->Errors->Err];
-                $errorMessages = array_map(fn($err) => "[{$err->Code}] {$err->Msg}", $errors);
-                
-                Log::error('AFIP returned errors', [
-                    'invoice_id' => $invoice->id,
-                    'errors' => $errors,
-                ]);
-                
-                throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
-            }
+             $response = $soapClient->FECAESolicitar([
+                 'Auth' => $auth,
+                 'FeCAEReq' => $invoiceData,
+             ]);
 
-            $detail = $result->FeDetResp->FECAEDetResponse;
+             $result = $response->FECAESolicitarResult;
 
-            if ($detail->Resultado !== 'A') {
-                $observations = [];
-                if (isset($detail->Observaciones)) {
-                    $obs = is_array($detail->Observaciones->Obs) ? $detail->Observaciones->Obs : [$detail->Observaciones->Obs];
-                    $observations = array_map(fn($o) => "[{$o->Code}] {$o->Msg}", $obs);
-                }
-                
-                Log::error('AFIP did not approve invoice', [
-                    'invoice_id' => $invoice->id,
-                    'resultado' => $detail->Resultado,
-                    'observations' => $observations,
-                ]);
-                
-                $obsMsg = !empty($observations) ? implode(' | ', $observations) : 'Sin detalles';
-                throw new \Exception('AFIP no aprobó la factura: ' . $obsMsg);
-            }
+             if (isset($result->Errors) && $result->Errors) {
+                 $errors = is_array($result->Errors->Err) ? $result->Errors->Err : [$result->Errors->Err];
+                 $errorMessages = array_map(fn($err) => "[{$err->Code}] {$err->Msg}", $errors);
+                 
+                 Log::error('AFIP returned errors', [
+                     'invoice_id' => $invoice->id,
+                     'errors' => $errors,
+                 ]);
+                 
+                 throw new \Exception('AFIP rechazó la factura: ' . implode(' | ', $errorMessages));
+             }
 
-            return [
-                'cae' => $detail->CAE,
-                'cae_expiration' => Carbon::createFromFormat('Ymd', $detail->CAEFchVto)->format('Y-m-d'),
-                'afip_result' => $detail->Resultado,
-                'certificate_id' => $this->company->afipCertificate->id,
-            ];
-        } catch (\Exception $e) {
-            throw $e;
-        }
-    }
+             $detail = $result->FeDetResp->FECAEDetResponse;
+
+             if ($detail->Resultado !== 'A') {
+                 $observations = [];
+                 if (isset($detail->Observaciones)) {
+                     $obs = is_array($detail->Observaciones->Obs) ? $detail->Observaciones->Obs : [$detail->Observaciones->Obs];
+                     $observations = array_map(fn($o) => "[{$o->Code}] {$o->Msg}", $obs);
+                 }
+                 
+                 Log::error('AFIP did not approve invoice', [
+                     'invoice_id' => $invoice->id,
+                     'resultado' => $detail->Resultado,
+                     'observations' => $observations,
+                 ]);
+                 
+                 $obsMsg = !empty($observations) ? implode(' | ', $observations) : 'Sin detalles';
+                 throw new \Exception('AFIP no aprobó la factura: ' . $obsMsg);
+             }
+
+             return [
+                 'cae' => $detail->CAE,
+                 'cae_expiration' => Carbon::createFromFormat('Ymd', $detail->CAEFchVto)->format('Y-m-d'),
+                 'afip_result' => $detail->Resultado,
+                 'certificate_id' => $this->company->afipCertificate->id,
+             ];
+         } catch (\Exception $e) {
+             throw $e;
+         }
+     }
 
     /**
      * Authorize FCE MiPyME (Factura de Crédito Electrónica)
@@ -162,20 +177,30 @@ class AfipInvoiceService
         if (!$invoice->payment_due_date) {
             throw new \Exception('FCE MiPyME requiere fecha de vencimiento de pago');
         }
-
+    
         $cbu = $invoice->issuer_cbu ?? $this->company->cbu;
         if (!$cbu) {
             throw new \Exception('FCE MiPyME requiere CBU del emisor');
         }
-
+    
         try {
             $client = new AfipWebServiceClient($this->company->afipCertificate, 'wsfex');
             $soapClient = $client->getWSFEXClient();
             $auth = $client->getAuthArray();
-
+    
             $invoiceType = $this->getAfipInvoiceType($invoice->type);
             $docType = $this->getAfipDocType($invoice->client);
-
+    
+            // Calcular Tributos array primero para obtener el total exacto
+            $tributosArray = $this->buildTributosArray($invoice);
+            $totalPerceptions = 0;
+            
+            if ($tributosArray && isset($tributosArray['Tributo'])) {
+                foreach ($tributosArray['Tributo'] as $tributo) {
+                    $totalPerceptions += $tributo['Importe'];
+                }
+            }
+    
             $fceData = [
                 'Auth' => $auth,
                 'Cmp' => [
@@ -188,7 +213,7 @@ class AfipInvoiceService
                     'Imp_tot_conc' => 0,
                     'Imp_neto' => $invoice->subtotal,
                     'Imp_iva' => $invoice->total_taxes,
-                    'Imp_trib' => $invoice->total_perceptions,
+                    'Imp_trib' => $totalPerceptions, // Usar el total calculado de los tributos redondeados
                     'Imp_op_ex' => 0,
                     'Fecha_cbte_hasta' => $invoice->issue_date->format('Ymd'),
                     'Fecha_venc_pago' => $invoice->payment_due_date->format('Ymd'),
@@ -373,6 +398,16 @@ class AfipInvoiceService
             $impNeto = $invoice->subtotal;
         }
         
+        // Calcular Tributos array primero para obtener el total exacto
+        $tributosArray = $this->buildTributosArray($invoice);
+        $totalPerceptions = 0;
+        
+        if ($tributosArray && isset($tributosArray['Tributo'])) {
+            foreach ($tributosArray['Tributo'] as $tributo) {
+                $totalPerceptions += $tributo['Importe'];
+            }
+        }
+        
         $monId = $this->mapSystemCurrencyToAfip($invoice->currency ?? 'ARS');
         $monCotiz = ($invoice->currency ?? 'ARS') === 'ARS' ? 1 : ($invoice->exchange_rate ?? 1);
         
@@ -390,12 +425,12 @@ class AfipInvoiceService
             'CbteDesde' => $invoice->voucher_number,
             'CbteHasta' => $invoice->voucher_number,
             'CbteFch' => $issueDate->format('Ymd'),
-            'ImpTotal' => $isTipoC ? $impNeto + $invoice->total_perceptions : round($impNeto + $impIVA + $invoice->total_perceptions, 2),
+            'ImpTotal' => $isTipoC ? $impNeto + $totalPerceptions : round($impNeto + $impIVA + $totalPerceptions, 2),
             'ImpTotConc' => 0,
             'ImpNeto' => round($impNeto, 2),
             'ImpOpEx' => 0,
             'ImpIVA' => round($impIVA, 2),
-            'ImpTrib' => $invoice->total_perceptions,
+            'ImpTrib' => $totalPerceptions, // Usar el total calculado de los tributos redondeados
             'MonId' => $monId,
             'MonCotiz' => $monCotiz,
         ];
@@ -404,6 +439,7 @@ class AfipInvoiceService
         $detRequest['CondicionIVAReceptorId'] = $condicionIva;
         
         // Factura C no lleva array de IVA
+        // AFIP requiere el array Iva incluso cuando ImpIVA=0 (con Id=3 para IVA 0%)
         if (!$isTipoC && $ivaArray) {
             $detRequest['Iva'] = $ivaArray;
         }
@@ -448,26 +484,18 @@ class AfipInvoiceService
                         // Determinar si la factura es emitida o recibida
                         $isIssued = (string)$relatedInvoice->issuer_company_id === (string)$invoice->issuer_company_id;
                         
-                        // Calcular cobros confirmados (para facturas emitidas)
-                        $totalCollections = 0;
-                        if ($isIssued) {
-                            $totalCollections = \App\Models\Collection::where('invoice_id', $relatedInvoice->id)
-                                ->where('status', 'confirmed')
-                                ->sum('amount');
-                        }
-                        
-                        // Calcular pagos confirmados (para facturas recibidas)
-                        $totalPayments = 0;
-                        if (!$isIssued) {
-                            $totalPayments = \Illuminate\Support\Facades\DB::table('invoice_payments_tracking')
-                                ->where('invoice_id', $relatedInvoice->id)
-                                ->whereIn('status', ['confirmed', 'in_process'])
-                                ->sum('amount');
-                        }
-                        
-                        // Balance = Total + ND - NC - Collections - Payments
-                        $currentBalance = ($relatedInvoice->total ?? 0) + $totalND - $totalNC - $totalCollections - $totalPayments;
+                        // Balance = Total + ND - NC (SIN incluir pagos/cobros)
+                        $currentBalance = ($relatedInvoice->total ?? 0) + $totalND - $totalNC;
                         $currentBalance = round(max(0, $currentBalance), 2); // Ensure non-negative and rounded
+                        
+                        Log::info('Balance calculation for NC validation', [
+                            'related_invoice_id' => $relatedInvoice->id,
+                            'related_invoice_total' => $relatedInvoice->total,
+                            'total_nc_approved' => $totalNC,
+                            'total_nd_approved' => $totalND,
+                            'calculated_balance' => $currentBalance,
+                            'new_nc_amount' => $invoice->total,
+                        ]);
                         
                         // Redondear el total de la nota también para comparar correctamente
                         $invoiceTotal = round($invoice->total, 2);
@@ -475,8 +503,7 @@ class AfipInvoiceService
                         if ($invoiceTotal > $currentBalance) {
                             throw new \Exception(
                                 "El monto de la Nota de Crédito (\${$invoiceTotal}) no puede superar el saldo pendiente de la factura (\${$currentBalance}). "
-                                . "Factura original: \${$relatedInvoice->total} | NC previas: \${$totalNC} | ND previas: \${$totalND} | "
-                                . ($isIssued ? "Cobros confirmados: \${$totalCollections}" : "Pagos confirmados: \${$totalPayments}")
+                                . "Factura original: \${$relatedInvoice->total} | NC previas: \${$totalNC} | ND previas: \${$totalND}"
                             );
                         }
                     }
@@ -708,6 +735,8 @@ class AfipInvoiceService
                 continue;
             }
             
+            // IVA 0% SÍ va en AlicIva con Id=3 (AFIP lo requiere)
+            
             // Calcular subtotal con descuento
             $itemBase = $item->quantity * $item->unit_price;
             $discount = ($item->discount_percentage ?? 0) / 100;
@@ -725,10 +754,6 @@ class AfipInvoiceService
             $ivaGroupsByAfipId[$afipId] += $itemSubtotal;
         }
         
-        if (empty($ivaGroupsByAfipId)) {
-            return null;
-        }
-        
         $alicIva = [];
         foreach ($ivaGroupsByAfipId as $afipId => $baseAmount) {
             $baseRounded = round($baseAmount, 2);
@@ -740,6 +765,11 @@ class AfipInvoiceService
                 'BaseImp' => $baseRounded,
                 'Importe' => $taxAmount,
             ];
+        }
+        
+        // AFIP requiere el array Iva incluso si está vacío o solo tiene IVA 0%
+        if (empty($alicIva)) {
+            return null;
         }
         
         Log::info('IVA Array built for AFIP', [
@@ -760,14 +790,33 @@ class AfipInvoiceService
         }
 
         $tributos = [];
+        $totalTributos = 0; // Variable para acumular la suma exacta de tributos
+        
         foreach ($invoice->perceptions as $perception) {
+            $importeRedondeado = round($perception->amount, 2);
             $tributos[] = [
                 'Id' => $this->getAfipTributoId($perception->type),
                 'Desc' => $perception->name,
                 'BaseImp' => round($perception->base_amount, 2),
                 'Alic' => round($perception->rate, 2),
-                'Importe' => round($perception->amount, 2),
+                'Importe' => $importeRedondeado,
             ];
+            $totalTributos += $importeRedondeado; // Acumular la suma de Importes redondeados
+        }
+
+        // Asegurar que ImpTrib coincida exactamente con la suma de los Importes redondeados
+        // Esto previene el error AFIP 10029
+        if (abs($totalTributos - $invoice->total_perceptions) > 0.01) {
+            Log::warning('Ajustando ImpTrib para coincidir con suma de tributos redondeados', [
+                'invoice_id' => $invoice->id,
+                'total_perceptions_original' => $invoice->total_perceptions,
+                'total_tributos_redondeados' => $totalTributos,
+                'diferencia' => $totalTributos - $invoice->total_perceptions,
+            ]);
+            
+            // Actualizar el valor en la factura para que coincida
+            $invoice->total_perceptions = $totalTributos;
+            $invoice->saveQuietly(); // Guardar sin disparar eventos
         }
 
         return ['Tributo' => $tributos];

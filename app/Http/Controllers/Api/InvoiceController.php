@@ -317,6 +317,38 @@ class InvoiceController extends Controller
                     'pdf_url' => $pdfPath,
                     'afip_txt_url' => $txtPath,
                 ]);
+
+                // Auditoría empresa: factura emitida y autorizada por AFIP
+                app(\App\Services\AuditService::class)->log(
+                    (string) $companyId,
+                    (string) (auth()->id() ?? ''),
+                    'invoice.issued',
+                    'Factura emitida y autorizada AFIP',
+                    'Invoice',
+                    (string) $invoice->id,
+                    [
+                        'afip_cae' => $afipResult['cae'] ?? null,
+                        'afip_cae_due_date' => $afipResult['cae_expiration'] ?? null,
+                        'total' => $total,
+                        'receiver_company_id' => $receiverCompanyId,
+                    ]
+                );
+
+                // Si hay empresa receptora, registrar auditoría en su contexto también
+                if ($receiverCompanyId) {
+                    app(\App\Services\AuditService::class)->log(
+                        (string) $receiverCompanyId,
+                        (string) (auth()->id() ?? ''),
+                        'invoice.received.pending_approval',
+                        'Factura recibida pendiente de aprobación',
+                        'Invoice',
+                        (string) $invoice->id,
+                        [
+                            'issuer_company_id' => (string) $companyId,
+                            'total' => $total,
+                        ]
+                    );
+                }
                 
                 // NO crear factura duplicada - cada empresa verá la misma factura según su rol
             } catch (\Exception $e) {
@@ -350,6 +382,20 @@ class InvoiceController extends Controller
             }
 
             DB::commit();
+
+            // Auditoría empresa: carga manual de factura emitida
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'invoice.manual_issued.created',
+                'Factura emitida cargada manualmente',
+                'Invoice',
+                (string) $invoice->id,
+                [
+                    'client_id' => $clientId,
+                    'total' => $total,
+                ]
+            );
 
             return response()->json([
                 'message' => 'Factura autorizada por AFIP exitosamente',
@@ -435,6 +481,20 @@ class InvoiceController extends Controller
                 ->delete();
             
             DB::commit();
+
+            // Auditoría empresa: carga manual de factura recibida
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'invoice.manual_received.created',
+                'Factura recibida cargada manualmente',
+                'Invoice',
+                (string) $invoice->id,
+                [
+                    'supplier_id' => $supplierId,
+                    'total' => $total,
+                ]
+            );
             return response()->json(['message' => 'Todas las facturas fueron eliminadas']);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -848,6 +908,20 @@ class InvoiceController extends Controller
             }
             
             DB::commit();
+
+            // Auditoría empresa: creación de factura recibida
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'invoice.received.created',
+                'Factura recibida creada',
+                'Invoice',
+                (string) $invoice->id,
+                [
+                    'supplier_id' => $supplier->id,
+                    'total' => $total,
+                ]
+            );
 
             // Determinar si se creó un cliente automáticamente
             $autoCreatedClient = false;
@@ -1842,10 +1916,15 @@ class InvoiceController extends Controller
         }
         
         // Facturas emitidas a través de AFIP (con CAE): incluye emitidas desde el sistema Y sincronizadas de AFIP
+        // EXCLUYE facturas manuales sin CAE real (AFIP no permite asociarlas)
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->where('afip_status', 'approved')
             ->whereNotNull('afip_cae')
-            ->whereIn('type', $compatibleTypes) // Filter by compatible types
+            ->where(function($q) {
+                $q->where('is_manual_load', false)
+                  ->orWhere('synced_from_afip', true);
+            })
+            ->whereIn('type', $compatibleTypes)
             ->where('status', '!=', 'cancelled')
             ->with(['client', 'receiverCompany', 'collections'])
             ->orderBy('issue_date', 'desc')
@@ -1859,6 +1938,7 @@ class InvoiceController extends Controller
                     'issued' => 'Emitida',
                     'approved' => 'Aprobada',
                     'paid' => 'Pagada',
+                    'collected' => 'Cobrada',
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
@@ -1867,11 +1947,16 @@ class InvoiceController extends Controller
                     'id' => $inv->id,
                     'number' => $inv->number,
                     'type' => $inv->type,
+                    'sales_point' => $inv->sales_point,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
                     'available_balance' => $availableBalance,
                     'balance_pending' => $availableBalance, // Alias for compatibility
                     'currency' => $inv->currency ?? 'ARS',
+                    'exchange_rate' => $inv->exchange_rate ?? 1,
+                    'concept' => $inv->concept ?? 'products',
+                    'service_date_from' => $inv->service_date_from?->format('Y-m-d'),
+                    'service_date_to' => $inv->service_date_to?->format('Y-m-d'),
                     'receiver_name' => $inv->receiver_name ?? $inv->receiverCompany?->name ?? $inv->client?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -1930,6 +2015,7 @@ class InvoiceController extends Controller
                     'pending_approval' => 'Pendiente aprobación',
                     'approved' => 'Aprobada',
                     'paid' => 'Pagada',
+                    'collected' => 'Cobrada',
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
@@ -1938,11 +2024,16 @@ class InvoiceController extends Controller
                     'id' => $inv->id,
                     'number' => $inv->number,
                     'type' => $inv->type,
+                    'sales_point' => $inv->sales_point,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
                     'available_balance' => $availableBalance,
                     'balance_pending' => $availableBalance, // Alias for compatibility
                     'currency' => $inv->currency ?? 'ARS',
+                    'exchange_rate' => $inv->exchange_rate ?? 1,
+                    'concept' => $inv->concept ?? 'products',
+                    'service_date_from' => $inv->service_date_from?->format('Y-m-d'),
+                    'service_date_to' => $inv->service_date_to?->format('Y-m-d'),
                     'issuer_name' => $inv->issuer_name ?? $inv->supplier?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -2002,6 +2093,7 @@ class InvoiceController extends Controller
                     'issued' => 'Emitida',
                     'approved' => 'Aprobada',
                     'paid' => 'Pagada',
+                    'collected' => 'Cobrada',
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
@@ -2010,11 +2102,16 @@ class InvoiceController extends Controller
                     'id' => $inv->id,
                     'number' => $inv->number,
                     'type' => $inv->type,
+                    'sales_point' => $inv->sales_point,
                     'issue_date' => $inv->issue_date,
                     'total' => $inv->total,
                     'available_balance' => $availableBalance,
                     'balance_pending' => $availableBalance, // Alias for compatibility
                     'currency' => $inv->currency ?? 'ARS',
+                    'exchange_rate' => $inv->exchange_rate ?? '1',
+                    'concept' => $inv->concept,
+                    'service_date_from' => $inv->service_date_from,
+                    'service_date_to' => $inv->service_date_to,
                     'receiver_name' => $inv->receiver_name ?? $inv->client?->business_name,
                     'status' => $inv->status,
                     'status_label' => $statusLabel,
@@ -2028,7 +2125,8 @@ class InvoiceController extends Controller
     }
 
     /**
-     * Calculate available balance for an invoice (considering NC/ND and collections/payments)
+     * Calculate available balance for an invoice (considering only NC/ND)
+     * Los pagos/cobros NO deben afectar el balance - solo ND/NC
      */
     private function calculateAvailableBalance(Invoice $invoice, string $companyId): float
     {
@@ -2037,52 +2135,25 @@ class InvoiceController extends Controller
         $totalNC = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
             ->sum('total');
         
         // Calculate total ND (debit notes) associated with this invoice
         $totalND = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
             ->sum('total');
         
-        // Determine if invoice is issued (by this company) or received
-        $isIssued = (string)$invoice->issuer_company_id === (string)$companyId;
-        
-        // Calculate confirmed collections (for issued invoices)
-        $totalCollections = 0;
-        if ($isIssued) {
-            if ($invoice->collections && $invoice->collections->isNotEmpty()) {
-                $totalCollections = $invoice->collections
-                    ->where('company_id', $companyId)
-                    ->where('status', 'confirmed')
-                    ->sum('amount');
-            } else {
-                // Fallback to query if relation not loaded
-                $totalCollections = \App\Models\Collection::where('invoice_id', $invoice->id)
-                    ->where('company_id', $companyId)
-                    ->where('status', 'confirmed')
-                    ->sum('amount');
-            }
-        }
-        
-        // Calculate confirmed payments (for received invoices)
-        $totalPayments = 0;
-        if (!$isIssued) {
-            $totalPayments = DB::table('invoice_payments_tracking')
-                ->where('invoice_id', $invoice->id)
-                ->where('company_id', $companyId)
-                ->whereIn('status', ['confirmed', 'in_process'])
-                ->sum('amount');
-        }
-        
-        // Balance = Total + ND - NC - Collections - Payments
-        $balance = ($invoice->total ?? 0) + $totalND - $totalNC - $totalCollections - $totalPayments;
+        // Balance = Total + ND - NC (SIN incluir pagos/cobros)
+        $balance = ($invoice->total ?? 0) + $totalND - $totalNC;
         
         return round(max(0, $balance), 2); // Ensure non-negative
     }
 
     /**
      * Update related invoice balance when a NC/ND is created
+     * Los pagos/cobros NO deben afectar el balance - solo ND/NC
      */
     private function updateRelatedInvoiceBalance(string $relatedInvoiceId): void
     {
@@ -2091,7 +2162,7 @@ class InvoiceController extends Controller
             return;
         }
         
-        // RECALCULAR SALDO COMPLETO: Total + ND - NC - Collections/Payments
+        // RECALCULAR SALDO: Total + ND - NC (SIN incluir pagos/cobros)
         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
@@ -2102,18 +2173,8 @@ class InvoiceController extends Controller
             ->where('status', '!=', 'cancelled')
             ->sum('total');
         
-        // Cobros/Pagos confirmados
-        $totalCollections = $relatedInvoice->collections()
-            ->where('status', 'confirmed')
-            ->sum('amount');
-        
-        $totalPayments = \DB::table('invoice_payments_tracking')
-            ->where('invoice_id', $relatedInvoice->id)
-            ->whereIn('status', ['confirmed', 'in_process'])
-            ->sum('amount');
-        
-        // Saldo = Total + ND - NC - Cobros - Pagos
-        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC - $totalCollections - $totalPayments;
+        // Saldo = Total + ND - NC (solo ND/NC afectan el balance)
+        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC;
         
         // Redondear para evitar problemas de precisión
         $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
@@ -2124,8 +2185,6 @@ class InvoiceController extends Controller
             'total' => $relatedInvoice->total,
             'total_nc' => $totalNC,
             'total_nd' => $totalND,
-            'total_collections' => $totalCollections,
-            'total_payments' => $totalPayments,
             'balance_pending' => $relatedInvoice->balance_pending,
         ]);
         

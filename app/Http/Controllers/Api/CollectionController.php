@@ -35,6 +35,7 @@ class CollectionController extends Controller
                     'type' => $collection->invoice->type,
                     'sales_point' => $collection->invoice->sales_point,
                     'voucher_number' => $collection->invoice->voucher_number,
+                    'currency' => $collection->invoice->currency ?? 'ARS',
                 ];
                 
                 if ($collection->invoice->client) {
@@ -106,16 +107,50 @@ class CollectionController extends Controller
                         ->where('status', 'confirmed')
                         ->sum('amount');
                     
-                    if ($totalCollected >= $invoice->total) {
+                    // Calcular balance pendiente (Total + ND - NC)
+                    $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                        ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                        ->where('status', '!=', 'cancelled')
+                        ->where('afip_status', 'approved')
+                        ->sum('total');
+                    
+                    $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                        ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                        ->where('status', '!=', 'cancelled')
+                        ->where('afip_status', 'approved')
+                        ->sum('total');
+                    
+                    $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+                    
+                    if ($totalCollected >= $balancePending) {
                         $companyStatuses = $invoice->company_statuses ?: [];
-                        $companyStatuses[(string)$companyId] = 'paid';
+                        $companyStatuses[(string)$companyId] = 'collected';
                         $invoice->company_statuses = $companyStatuses;
+                        $invoice->status = 'collected';
                         $invoice->save();
                     }
                 }
             }
             
             DB::commit();
+
+            // Auditoría empresa: cobro creado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'collection.created',
+                'Cobro creado',
+                'Collection',
+                (string) $collection->id,
+                [
+                    'invoice_id' => (string) $collection->invoice_id,
+                    'amount' => $collection->amount,
+                    'method' => $collection->collection_method,
+                    'status' => $collection->status,
+                    'from_network' => $collection->from_network,
+                ]
+            );
+
             return response()->json($collection->load(['invoice.client', 'registeredBy']), 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -137,6 +172,17 @@ class CollectionController extends Controller
         ]);
 
         $collection->update($validated);
+
+        // Auditoría empresa: cobro actualizado
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'collection.updated',
+            'Cobro actualizado',
+            'Collection',
+            (string) $collection->id,
+            [ 'updated_fields' => array_keys($validated) ]
+        );
 
         return response()->json($collection->load(['invoice.client', 'registeredBy', 'confirmedBy']));
     }
@@ -162,14 +208,41 @@ class CollectionController extends Controller
                 ->where('status', 'confirmed')
                 ->sum('amount');
             
-            if ($totalCollected >= $invoice->total) {
+            // Calcular balance pendiente (Total + ND - NC)
+            $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                ->where('status', '!=', 'cancelled')
+                ->where('afip_status', 'approved')
+                ->sum('total');
+            
+            $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                ->where('status', '!=', 'cancelled')
+                ->where('afip_status', 'approved')
+                ->sum('total');
+            
+            $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+            
+            if ($totalCollected >= $balancePending) {
                 $companyStatuses = $invoice->company_statuses ?: [];
-                $companyStatuses[(string)$companyId] = 'paid';
+                $companyStatuses[(string)$companyId] = 'collected';
                 $invoice->company_statuses = $companyStatuses;
+                $invoice->status = 'collected';
                 $invoice->save();
             }
 
             DB::commit();
+
+            // Auditoría empresa: cobro confirmado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'collection.confirmed',
+                'Cobro confirmado',
+                'Collection',
+                (string) $collection->id,
+                [ 'invoice_id' => (string) $collection->invoice_id, 'amount' => $collection->amount ]
+            );
 
             return response()->json($collection->load(['invoice.client', 'registeredBy', 'confirmedBy']));
         } catch (\Exception $e) {
@@ -191,6 +264,17 @@ class CollectionController extends Controller
             $invoiceId = $collection->invoice_id;
             $collection->delete();
 
+            // Auditoría empresa: cobro eliminado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'collection.deleted',
+                'Cobro eliminado',
+                'Collection',
+                (string) $collection->id,
+                [ 'invoice_id' => (string) $invoiceId, 'amount' => $collection->amount ]
+            );
+
             // Recalcular company_statuses JSON
             $invoice = Invoice::find($invoiceId);
             if ($invoice) {
@@ -198,13 +282,29 @@ class CollectionController extends Controller
                     ->where('status', 'confirmed')
                     ->sum('amount');
                 
+                // Calcular balance pendiente (Total + ND - NC)
+                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->sum('total');
+                
+                $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->sum('total');
+                
+                $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+                
                 $companyStatuses = $invoice->company_statuses ?: [];
-                if ($totalCollected < $invoice->total) {
+                if ($totalCollected < $balancePending) {
                     $companyStatuses[(string)$companyId] = 'issued';
                 } else {
-                    $companyStatuses[(string)$companyId] = 'paid';
+                    $companyStatuses[(string)$companyId] = 'collected';
                 }
                 $invoice->company_statuses = $companyStatuses;
+                $invoice->status = $companyStatuses[(string)$companyId];
                 $invoice->save();
             }
 
@@ -244,17 +344,45 @@ class CollectionController extends Controller
                     ->where('status', 'confirmed')
                     ->sum('amount');
                 
+                // Calcular balance pendiente (Total + ND - NC)
+                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->sum('total');
+                
+                $totalND = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->sum('total');
+                
+                $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+                
                 $companyStatuses = $invoice->company_statuses ?: [];
-                if ($totalCollected < $invoice->total) {
+                if ($totalCollected < $balancePending) {
                     $companyStatuses[(string)$companyId] = 'issued';
                 } else {
-                    $companyStatuses[(string)$companyId] = 'paid';
+                    $companyStatuses[(string)$companyId] = 'collected';
                 }
                 $invoice->company_statuses = $companyStatuses;
+                $invoice->status = $companyStatuses[(string)$companyId];
                 $invoice->save();
             }
 
             DB::commit();
+
+            // Auditoría empresa: cobro rechazado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'collection.rejected',
+                'Cobro rechazado',
+                'Collection',
+                (string) $collection->id,
+                [ 'invoice_id' => (string) $invoiceId, 'notes' => $collection->notes ]
+            );
+
             return response()->json($collection->load(['invoice.client', 'registeredBy']));
         } catch (\Exception $e) {
             DB::rollBack();

@@ -76,6 +76,10 @@ class PaymentController extends Controller
                         ->sum('amount');
                     
                     if ($totalPaid >= $invoice->total) {
+                        // Para facturas recibidas, actualizar company_statuses y status global
+                        $companyStatuses = $invoice->company_statuses ?: [];
+                        $companyStatuses[(string)$companyId] = 'paid';
+                        $invoice->company_statuses = $companyStatuses;
                         $invoice->status = 'paid';
                         $invoice->save();
                     }
@@ -83,6 +87,21 @@ class PaymentController extends Controller
             }
 
             DB::commit();
+            // Auditoría empresa: pago creado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'payment.created',
+                'Pago creado',
+                'Payment',
+                (string) $payment->id,
+                [
+                    'invoice_id' => (string) $payment->invoice_id,
+                    'amount' => $payment->amount,
+                    'method' => $payment->payment_method,
+                    'status' => $payment->status,
+                ]
+            );
 
             return response()->json($payment->load(['invoice.supplier', 'registeredBy', 'retentions']), 201);
         } catch (\Exception $e) {
@@ -106,6 +125,17 @@ class PaymentController extends Controller
 
         $payment->update($validated);
 
+        // Auditoría empresa: pago actualizado
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'payment.updated',
+            'Pago actualizado',
+            'Payment',
+            (string) $payment->id,
+            [ 'updated_fields' => array_keys($validated) ]
+        );
+
         return response()->json($payment->load(['invoice.supplier', 'registeredBy', 'confirmedBy']));
     }
 
@@ -122,14 +152,29 @@ class PaymentController extends Controller
             $invoiceId = $payment->invoice_id;
             $payment->delete();
 
+            // Auditoría empresa: pago eliminado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'payment.deleted',
+                'Pago eliminado',
+                'Payment',
+                (string) $payment->id,
+                [ 'invoice_id' => (string) $invoiceId, 'amount' => $payment->amount ]
+            );
+
             // Recalcular estado de factura
             $invoice = Invoice::find($invoiceId);
-            if ($invoice && $invoice->status === 'paid') {
+            if ($invoice) {
                 $totalPaid = Payment::where('invoice_id', $invoice->id)
                     ->where('status', 'confirmed')
                     ->sum('amount');
                 
                 if ($totalPaid < $invoice->total) {
+                    // Si ya no está totalmente pagada, actualizar company_statuses y restaurar status global
+                    $companyStatuses = $invoice->company_statuses ?: [];
+                    unset($companyStatuses[(string)$companyId]);
+                    $invoice->company_statuses = $companyStatuses;
                     $invoice->status = 'issued';
                     $invoice->save();
                 }
@@ -165,11 +210,26 @@ class PaymentController extends Controller
                 ->sum('amount');
             
             if ($totalPaid >= $invoice->total) {
+                // Para facturas recibidas, actualizar company_statuses y status global
+                $companyStatuses = $invoice->company_statuses ?: [];
+                $companyStatuses[(string)$companyId] = 'paid';
+                $invoice->company_statuses = $companyStatuses;
                 $invoice->status = 'paid';
                 $invoice->save();
             }
 
             DB::commit();
+
+            // Auditoría empresa: pago confirmado
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'payment.confirmed',
+                'Pago confirmado',
+                'Payment',
+                (string) $payment->id,
+                [ 'invoice_id' => (string) $payment->invoice_id, 'amount' => $payment->amount ]
+            );
 
             return response()->json($payment->load(['invoice.supplier', 'registeredBy', 'confirmedBy']));
         } catch (\Exception $e) {
