@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('companies', function (Blueprint $table) {
-            $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt', 'final_consumer'])->nullable()->change();
+            $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt'])->nullable()->change();
         });
     }
 

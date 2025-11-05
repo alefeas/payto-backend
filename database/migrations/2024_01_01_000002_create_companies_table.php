@@ -24,7 +24,7 @@ return new class extends Migration
             $table->string('invite_code', 50)->unique()->nullable();
             $table->string('default_role', 50)->default('operator');
             $table->string('tax_regime', 50)->default('registered_taxpayer');
-            $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt'])->default('registered_taxpayer');
+            $table->enum('tax_condition', ['registered_taxpayer', 'monotax', 'exempt'])->nullable()->default('registered_taxpayer');
             $table->string('gross_income_number', 20)->nullable();
             $table->date('activity_start_date')->nullable();
             $table->string('currency', 3)->default('ARS');

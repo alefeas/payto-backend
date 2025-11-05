@@ -53,6 +53,11 @@ class Company extends Model
         'verified_at' => 'datetime',
     ];
 
+    public function setTaxConditionAttribute($value)
+    {
+        $this->attributes['tax_condition'] = empty($value) ? null : $value;
+    }
+
     public function members()
     {
         return $this->hasMany(CompanyMember::class);
