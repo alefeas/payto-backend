@@ -201,6 +201,17 @@ class CompanyConnectionController extends Controller
             'requested_by' => auth()->id(),
         ]);
 
+        // Auditoría empresa: solicitud de conexión enviada
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'company_connection.requested',
+            'Solicitud de conexión enviada',
+            'CompanyConnection',
+            (string) $connection->id,
+            [ 'to_company_id' => (string) $targetCompany->id ]
+        );
+
         return response()->json([
             'message' => 'Solicitud enviada exitosamente',
             'connection' => $connection
@@ -227,6 +238,17 @@ class CompanyConnectionController extends Controller
             'connected_at' => now(),
         ]);
 
+        // Auditoría empresa: conexión aceptada
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'company_connection.accepted',
+            'Conexión aceptada',
+            'CompanyConnection',
+            (string) $connection->id,
+            [ 'from_company_id' => (string) $connection->company_id ]
+        );
+
         return response()->json([
             'message' => 'Conexión aceptada exitosamente',
             'connection' => $connection
@@ -249,6 +271,17 @@ class CompanyConnectionController extends Controller
         }
 
         $connection->forceDelete();
+
+        // Auditoría empresa: solicitud de conexión rechazada
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'company_connection.rejected',
+            'Solicitud de conexión rechazada',
+            'CompanyConnection',
+            (string) $connectionId,
+            [ 'from_company_id' => (string) $connection->company_id ]
+        );
 
         return response()->json(['message' => 'Solicitud rechazada']);
     }
@@ -448,6 +481,20 @@ class CompanyConnectionController extends Controller
             $connection->forceDelete();
             
             DB::commit();
+
+            // Auditoría empresa: conexión eliminada y entidades ajustadas
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'company_connection.deleted',
+                'Conexión eliminada y entidades vinculadas ajustadas',
+                'CompanyConnection',
+                (string) $connectionId,
+                [
+                    'other_company_id' => (string) $otherCompanyId,
+                    'created_entities' => $created,
+                ]
+            );
             
             $message = 'Conexión eliminada correctamente';
             if (!empty($created)) {

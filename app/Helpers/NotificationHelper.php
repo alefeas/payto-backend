@@ -128,6 +128,7 @@ class NotificationHelper
             'approved' => 'aprobada',
             'rejected' => 'rechazada',
             'paid' => 'pagada',
+            'collected' => 'cobrada',
             'partially_paid' => 'pagada parcialmente',
             'cancelled' => 'cancelada',
             'dispute' => 'en disputa',

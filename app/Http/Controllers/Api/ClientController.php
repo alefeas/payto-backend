@@ -57,6 +57,17 @@ class ClientController extends Controller
 
         $client->restore();
 
+        // Auditoría empresa: restauración de cliente externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'client.restored',
+            'Cliente externo restaurado',
+            'Client',
+            (string) $client->id,
+            []
+        );
+
         return $this->success($client, 'Cliente restaurado correctamente');
     }
 
@@ -114,6 +125,16 @@ class ClientController extends Controller
             'company_id' => $companyId,
             ...$validated,
         ]);
+        // Auditoría empresa: creación de cliente externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'client.created',
+            'Cliente externo creado',
+            'Client',
+            (string) $client->id,
+            [ 'document_number' => $client->document_number ]
+        );
 
         return $this->success($client, 'Client created successfully', 201);
     }
@@ -200,6 +221,17 @@ class ClientController extends Controller
             }
         }
 
+        // Auditoría empresa: actualización de cliente externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'client.updated',
+            'Cliente externo actualizado',
+            'Client',
+            (string) $client->id,
+            [ 'updated_fields' => array_keys($validated) ]
+        );
+
         return $this->success($client, 'Client updated successfully');
     }
 
@@ -213,6 +245,17 @@ class ClientController extends Controller
         // SoftDelete: El cliente se marca como archivado pero los datos persisten
         // El Libro IVA puede seguir accediendo con withTrashed()
         $client->delete();
+
+        // Auditoría empresa: cliente archivado (soft delete)
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'client.deleted',
+            'Cliente externo archivado',
+            'Client',
+            (string) $client->id,
+            []
+        );
 
         return $this->success(null, 'Cliente archivado correctamente');
     }
@@ -253,11 +296,33 @@ class ClientController extends Controller
             // Reactivar foreign key checks
             \DB::statement('SET FOREIGN_KEY_CHECKS=1;');
             
+            // Auditoría empresa: cliente eliminado permanentemente (force=true)
+            app(\App\Services\AuditService::class)->log(
+                (string) $companyId,
+                (string) (auth()->id() ?? ''),
+                'client.force_deleted',
+                'Cliente externo eliminado permanentemente (force bypass)',
+                'Client',
+                (string) $client->id,
+                []
+            );
+
             return $this->success(null, 'Cliente eliminado permanentemente');
         }
 
         // Permanent delete
         $client->forceDelete();
+
+        // Auditoría empresa: cliente eliminado permanentemente
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'client.force_deleted',
+            'Cliente externo eliminado permanentemente',
+            'Client',
+            (string) $client->id,
+            []
+        );
 
         return $this->success(null, 'Cliente eliminado permanentemente');
     }

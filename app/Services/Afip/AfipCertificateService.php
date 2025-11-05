@@ -225,6 +225,21 @@ class AfipCertificateService
             'verification_status' => 'verified',
         ]);
 
+        // Auditoría empresa: certificado AFIP subido/actualizado
+        app(\App\Services\AuditService::class)->log(
+            (string) $company->id,
+            (string) (auth()->id() ?? ''),
+            'afip.certificate.uploaded',
+            'Certificado AFIP configurado',
+            'CompanyAfipCertificate',
+            (string) $certificate->id,
+            [
+                'environment' => $environment,
+                'valid_from' => $certificate->valid_from,
+                'valid_until' => $certificate->valid_until,
+            ]
+        );
+
         return $certificate;
     }
 
@@ -338,6 +353,21 @@ class AfipCertificateService
             'verification_status' => 'verified',
         ]);
 
+        // Auditoría empresa: certificado AFIP subido manualmente
+        app(\App\Services\AuditService::class)->log(
+            (string) $company->id,
+            (string) (auth()->id() ?? ''),
+            'afip.certificate.uploaded_manual',
+            'Certificado AFIP configurado (manual)',
+            'CompanyAfipCertificate',
+            (string) $certificate->id,
+            [
+                'environment' => $environment,
+                'valid_from' => $certificate->valid_from,
+                'valid_until' => $certificate->valid_until,
+            ]
+        );
+
         return $certificate;
     }
 
@@ -364,7 +394,18 @@ class AfipCertificateService
             Storage::delete($certificate->csr_path);
         }
 
+        $id = (string) $certificate->id;
         $certificate->delete();
+
+        // Auditoría empresa: certificado AFIP eliminado
+        app(\App\Services\AuditService::class)->log(
+            (string) $company->id,
+            (string) (auth()->id() ?? ''),
+            'afip.certificate.deleted',
+            'Certificado AFIP eliminado',
+            'CompanyAfipCertificate',
+            $id
+        );
         return true;
     }
 

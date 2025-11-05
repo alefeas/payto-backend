@@ -22,6 +22,12 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Audit logs routes
     Route::get('/companies/{companyId}/audit-logs', [App\Http\Controllers\Api\AuditLogController::class, 'index']);
+    Route::get('/companies/{companyId}/audit-logs/stats', [App\Http\Controllers\Api\AuditLogController::class, 'stats']);
+    Route::get('/companies/{companyId}/audit-logs/export', [App\Http\Controllers\Api\AuditLogController::class, 'export']);
+    Route::get('/companies/{companyId}/audit-logs/entity/{entityType}/{entityId}', [App\Http\Controllers\Api\AuditLogController::class, 'entityLogs']);
+    Route::get('/companies/{companyId}/audit-logs/user/{userId}', [App\Http\Controllers\Api\AuditLogController::class, 'userLogs']);
+    Route::get('/companies/{companyId}/audit-logs/recent', [App\Http\Controllers\Api\AuditLogController::class, 'recent']);
+    Route::get('/companies/{companyId}/audit-logs/trail/{entityType}/{entityId}', [App\Http\Controllers\Api\AuditLogController::class, 'trail']);
     
     // AFIP certificate routes
     Route::get('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'show']);

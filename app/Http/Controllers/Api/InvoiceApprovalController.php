@@ -40,6 +40,17 @@ class InvoiceApprovalController extends Controller
         $invoice->increment('approvals_received');
         $invoice->refresh();
 
+        // Auditoría empresa: aprobación de factura
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) $user->id,
+            'invoice.approved',
+            'Factura aprobada',
+            'Invoice',
+            (string) $invoice->id,
+            [ 'notes' => $request->input('notes') ]
+        );
+
         // Actualizar estado solo para la empresa receptora
         $company = Company::findOrFail($companyId);
         $requiredApprovals = $company->required_approvals ?? 0;
@@ -89,6 +100,17 @@ class InvoiceApprovalController extends Controller
         $invoice->rejected_at = now();
         $invoice->rejected_by = $user->id;
         $invoice->save();
+
+        // Auditoría empresa: rechazo de factura
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) $user->id,
+            'invoice.rejected',
+            'Factura rechazada',
+            'Invoice',
+            (string) $invoice->id,
+            [ 'reason' => $request->input('reason') ]
+        );
 
         return $this->success(null, 'Factura rechazada');
     }

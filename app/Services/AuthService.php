@@ -65,6 +65,16 @@ class AuthService implements AuthServiceInterface
         $tokenName = 'auth_token_' . now()->format('Y-m-d_H:i:s');
         $token = $user->createToken($tokenName)->plainTextToken;
 
+        // Auditoría sistema: login
+        app(\App\Services\SystemAuditService::class)->log(
+            $user->id,
+            'auth.login',
+            'Usuario inició sesión',
+            'User',
+            $user->id,
+            [ 'email' => $user->email ]
+        );
+
         return [
             'user' => $this->formatUserData($user),
             'token' => $token,
@@ -79,6 +89,15 @@ class AuthService implements AuthServiceInterface
 
         if ($user) {
             $user->tokens()->delete();
+            // Auditoría sistema: logout
+            app(\App\Services\SystemAuditService::class)->log(
+                $user->id,
+                'auth.logout',
+                'Usuario cerró sesión',
+                'User',
+                $user->id,
+                [ 'email' => $user->email ]
+            );
             return true;
         }
 
@@ -175,6 +194,16 @@ class AuthService implements AuthServiceInterface
         $tokenName = 'auth_token_' . now()->format('Y-m-d_H:i:s');
         $token = $user->createToken($tokenName)->plainTextToken;
 
+        // Auditoría sistema: signup
+        app(\App\Services\SystemAuditService::class)->log(
+            $user->id,
+            'auth.signup',
+            'Usuario registrado',
+            'User',
+            $user->id,
+            [ 'email' => $user->email ]
+        );
+
         return [
             'user' => $this->formatUserData($user),
             'token' => $token,
@@ -238,6 +267,16 @@ class AuthService implements AuthServiceInterface
         $htmlContent = view('emails.reset-password', ['userName' => $userName, 'resetUrl' => $resetUrl])->render();
         $emailService->send($user->email, 'Recuperá tu contraseña - PayTo', $htmlContent);
 
+        // Auditoría sistema: solicitud de reset de contraseña
+        app(\App\Services\SystemAuditService::class)->log(
+            $user->id ?? null,
+            'auth.password.request',
+            'Solicitud de recuperación de contraseña',
+            'User',
+            $user?->id,
+            [ 'email' => $email ]
+        );
+
         return true;
     }
 
@@ -263,6 +302,16 @@ class AuthService implements AuthServiceInterface
             // Revocar todos los tokens por seguridad
             $user->tokens()->delete();
         });
+
+        // Auditoría sistema: reset de contraseña
+        app(\App\Services\SystemAuditService::class)->log(
+            $user->id,
+            'auth.password.reset',
+            'Usuario restableció su contraseña',
+            'User',
+            $user->id,
+            [ 'email' => $user->email ]
+        );
 
         return true;
     }

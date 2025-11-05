@@ -41,6 +41,17 @@ class SupplierController extends Controller
             ->findOrFail($id);
         
         $supplier->restore();
+
+        // Auditoría empresa: restauración de proveedor externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'supplier.restored',
+            'Proveedor externo restaurado',
+            'Supplier',
+            (string) $supplier->id,
+            []
+        );
         return response()->json(['message' => 'Proveedor restaurado correctamente', 'supplier' => $supplier]);
     }
 
@@ -98,6 +109,17 @@ class SupplierController extends Controller
         }
 
         $supplier = Supplier::create([...$validated, 'company_id' => $companyId]);
+
+        // Auditoría empresa: creación de proveedor externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'supplier.created',
+            'Proveedor externo creado',
+            'Supplier',
+            (string) $supplier->id,
+            [ 'document_number' => $supplier->document_number ]
+        );
         return response()->json($supplier, 201);
     }
 
@@ -175,6 +197,17 @@ class SupplierController extends Controller
         }
 
         $supplier->update($validated);
+
+        // Auditoría empresa: actualización de proveedor externo
+        app(\App\Services\AuditService::class)->log(
+            (string) $companyId,
+            (string) (auth()->id() ?? ''),
+            'supplier.updated',
+            'Proveedor externo actualizado',
+            'Supplier',
+            (string) $supplier->id,
+            [ 'updated_fields' => array_keys($validated) ]
+        );
         return response()->json($supplier);
     }
 

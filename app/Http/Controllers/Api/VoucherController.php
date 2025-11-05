@@ -214,12 +214,16 @@ class VoucherController extends Controller
                 'client' => function($query) { $query->withTrashed(); },
                 'receiverCompany'
             ])
+            ->select('*') // Asegurar que se carguen todos los campos incluyendo concept
             ->orderBy('issue_date', 'desc')
             ->get()
             ->map(function($invoice) use ($companyId) {
                 Log::info('Processing invoice for selector', [
                     'invoice_id' => $invoice->id,
                     'invoice_number' => $invoice->number,
+                    'invoice_concept_raw' => $invoice->concept,
+                    'invoice_concept_is_null' => is_null($invoice->concept),
+                    'invoice_concept_empty' => empty($invoice->concept),
                     'has_client' => !is_null($invoice->client),
                     'client_id' => $invoice->client_id,
                     'has_receiverCompany' => !is_null($invoice->receiverCompany),
@@ -271,7 +275,11 @@ class VoucherController extends Controller
                     'receiver_tax_condition' => $invoice->receiver_tax_condition,
                 ];
                 
-                Log::info('Invoice mapped for selector', $result);
+                Log::info('Invoice mapped for selector', array_merge($result, [
+                    'original_concept' => $invoice->concept,
+                    'concept_source' => $invoice->concept ? 'database' : 'fallback_products',
+                    'fallback_applied' => !$invoice->concept
+                ]));
                 
                 return $result;
             });
@@ -636,7 +644,7 @@ class VoucherController extends Controller
             return;
         }
         
-        // RECALCULAR SALDO COMPLETO: Total + ND - NC - Collections/Payments
+        // RECALCULAR SALDO: Total + ND - NC (SIN incluir pagos/cobros)
         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
@@ -647,18 +655,8 @@ class VoucherController extends Controller
             ->where('status', '!=', 'cancelled')
             ->sum('total');
         
-        // Cobros/Pagos confirmados
-        $totalCollections = $relatedInvoice->collections()
-            ->where('status', 'confirmed')
-            ->sum('amount');
-        
-        $totalPayments = \DB::table('invoice_payments_tracking')
-            ->where('invoice_id', $relatedInvoice->id)
-            ->whereIn('status', ['confirmed', 'in_process'])
-            ->sum('amount');
-        
-        // Saldo = Total + ND - NC - Cobros - Pagos
-        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC - $totalCollections - $totalPayments;
+        // Saldo = Total + ND - NC (solo ND/NC afectan el balance)
+        $relatedInvoice->balance_pending = $relatedInvoice->total + $totalND - $totalNC;
         
         // Redondear para evitar problemas de precisión
         $relatedInvoice->balance_pending = round($relatedInvoice->balance_pending, 2);
@@ -669,8 +667,6 @@ class VoucherController extends Controller
             'total' => $relatedInvoice->total,
             'total_nc' => $totalNC,
             'total_nd' => $totalND,
-            'total_collections' => $totalCollections,
-            'total_payments' => $totalPayments,
             'balance_pending' => $relatedInvoice->balance_pending,
         ]);
         
