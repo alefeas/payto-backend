@@ -12,7 +12,7 @@ class PaymentController extends Controller
 {
     public function index(Request $request, $companyId)
     {
-        $query = Payment::with(['invoice.supplier', 'registeredBy', 'confirmedBy'])
+        $query = Payment::with(['invoice.supplier', 'invoice.issuerCompany', 'registeredBy', 'confirmedBy'])
             ->where('company_id', $companyId);
 
         if ($request->has('status')) {
@@ -20,8 +20,46 @@ class PaymentController extends Controller
         }
 
         $payments = $query->orderBy('payment_date', 'desc')->get();
+        
+        // Format payments to ensure proper data structure
+        $formatted = $payments->map(function($payment) {
+            $data = $payment->toArray();
+            
+            if ($payment->invoice) {
+                $data['invoice'] = [
+                    'id' => $payment->invoice->id,
+                    'type' => $payment->invoice->type,
+                    'sales_point' => $payment->invoice->sales_point,
+                    'voucher_number' => $payment->invoice->voucher_number,
+                    'currency' => $payment->invoice->currency ?? 'ARS',
+                ];
+                
+                if ($payment->invoice->supplier) {
+                    $data['invoice']['supplier'] = [
+                        'id' => $payment->invoice->supplier->id,
+                        'business_name' => $payment->invoice->supplier->business_name,
+                        'first_name' => $payment->invoice->supplier->first_name,
+                        'last_name' => $payment->invoice->supplier->last_name,
+                    ];
+                } else {
+                    $data['invoice']['supplier'] = null;
+                }
+                
+                if ($payment->invoice->issuerCompany) {
+                    $data['invoice']['issuerCompany'] = [
+                        'id' => $payment->invoice->issuerCompany->id,
+                        'business_name' => $payment->invoice->issuerCompany->business_name,
+                        'name' => $payment->invoice->issuerCompany->name,
+                    ];
+                } else {
+                    $data['invoice']['issuerCompany'] = null;
+                }
+            }
+            
+            return $data;
+        });
 
-        return response()->json($payments);
+        return response()->json($formatted);
     }
 
     public function store(Request $request, $companyId)
