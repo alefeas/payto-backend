@@ -48,6 +48,34 @@ class AnalyticsController extends Controller
             ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
             ->get();
 
+        // Agrupar por moneda
+        $salesByCurrency = [
+            'ARS' => ['total' => 0, 'count' => 0],
+            'USD' => ['total' => 0, 'count' => 0],
+            'EUR' => ['total' => 0, 'count' => 0]
+        ];
+        $purchasesByCurrency = [
+            'ARS' => ['total' => 0, 'count' => 0],
+            'USD' => ['total' => 0, 'count' => 0],
+            'EUR' => ['total' => 0, 'count' => 0]
+        ];
+
+        foreach ($issuedInvoices as $invoice) {
+            $currency = $invoice->currency ?? 'ARS';
+            if (isset($salesByCurrency[$currency])) {
+                $salesByCurrency[$currency]['total'] += $invoice->total;
+                $salesByCurrency[$currency]['count']++;
+            }
+        }
+
+        foreach ($receivedInvoices as $invoice) {
+            $currency = $invoice->currency ?? 'ARS';
+            if (isset($purchasesByCurrency[$currency])) {
+                $purchasesByCurrency[$currency]['total'] += $invoice->total;
+                $purchasesByCurrency[$currency]['count']++;
+            }
+        }
+
         return response()->json([
             'period' => [
                 'start' => $startOfMonth->format('Y-m-d'),
@@ -64,7 +92,9 @@ class AnalyticsController extends Controller
                 'count' => $receivedInvoices->count(),
                 'average' => $receivedInvoices->count() > 0 ? $receivedInvoices->sum('total') / $receivedInvoices->count() : 0
             ],
-            'balance' => $issuedInvoices->sum('total') - $receivedInvoices->sum('total')
+            'balance' => $issuedInvoices->sum('total') - $receivedInvoices->sum('total'),
+            'sales_by_currency' => $salesByCurrency,
+            'purchases_by_currency' => $purchasesByCurrency
         ]);
     }
 
@@ -85,21 +115,27 @@ class AnalyticsController extends Controller
                 $endOfMonth = $date->copy()->endOfMonth();
                 if ($endOfMonth->gt($endDate)) $endOfMonth = $endDate;
 
-                $sales = Invoice::where('issuer_company_id', $companyId)
+                $salesInvoices = Invoice::where('issuer_company_id', $companyId)
                     ->whereIn('status', ['issued', 'approved', 'paid'])
                     ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                    ->sum('total');
+                    ->get();
 
-                $purchases = Invoice::where('receiver_company_id', $companyId)
+                $purchasesInvoices = Invoice::where('receiver_company_id', $companyId)
                     ->whereIn('status', ['issued', 'approved', 'paid'])
                     ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                    ->sum('total');
+                    ->get();
 
                 $months[] = [
                     'month' => $date->format('M Y'),
-                    'sales' => $sales,
-                    'purchases' => $purchases,
-                    'balance' => $sales - $purchases
+                    'sales' => $salesInvoices->sum('total'),
+                    'purchases' => $purchasesInvoices->sum('total'),
+                    'balance' => $salesInvoices->sum('total') - $purchasesInvoices->sum('total'),
+                    'sales_ARS' => $salesInvoices->where('currency', 'ARS')->sum('total'),
+                    'sales_USD' => $salesInvoices->where('currency', 'USD')->sum('total'),
+                    'sales_EUR' => $salesInvoices->where('currency', 'EUR')->sum('total'),
+                    'purchases_ARS' => $purchasesInvoices->where('currency', 'ARS')->sum('total'),
+                    'purchases_USD' => $purchasesInvoices->where('currency', 'USD')->sum('total'),
+                    'purchases_EUR' => $purchasesInvoices->where('currency', 'EUR')->sum('total')
                 ];
             }
         } else {
@@ -114,21 +150,27 @@ class AnalyticsController extends Controller
                 $startOfMonth = $date->copy()->startOfMonth();
                 $endOfMonth = $date->copy()->endOfMonth();
 
-                $sales = Invoice::where('issuer_company_id', $companyId)
+                $salesInvoices = Invoice::where('issuer_company_id', $companyId)
                     ->whereIn('status', ['issued', 'approved', 'paid'])
                     ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                    ->sum('total');
+                    ->get();
 
-                $purchases = Invoice::where('receiver_company_id', $companyId)
+                $purchasesInvoices = Invoice::where('receiver_company_id', $companyId)
                     ->whereIn('status', ['issued', 'approved', 'paid'])
                     ->whereBetween('issue_date', [$startOfMonth, $endOfMonth])
-                    ->sum('total');
+                    ->get();
 
                 $months[] = [
                     'month' => $date->format('M Y'),
-                    'sales' => $sales,
-                    'purchases' => $purchases,
-                    'balance' => $sales - $purchases
+                    'sales' => $salesInvoices->sum('total'),
+                    'purchases' => $purchasesInvoices->sum('total'),
+                    'balance' => $salesInvoices->sum('total') - $purchasesInvoices->sum('total'),
+                    'sales_ARS' => $salesInvoices->where('currency', 'ARS')->sum('total'),
+                    'sales_USD' => $salesInvoices->where('currency', 'USD')->sum('total'),
+                    'sales_EUR' => $salesInvoices->where('currency', 'EUR')->sum('total'),
+                    'purchases_ARS' => $purchasesInvoices->where('currency', 'ARS')->sum('total'),
+                    'purchases_USD' => $purchasesInvoices->where('currency', 'USD')->sum('total'),
+                    'purchases_EUR' => $purchasesInvoices->where('currency', 'EUR')->sum('total')
                 ];
             }
         }
