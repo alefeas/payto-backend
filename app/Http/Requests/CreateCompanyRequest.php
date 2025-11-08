@@ -30,6 +30,7 @@ class CreateCompanyRequest extends FormRequest
             'street_number' => 'required|string|max:10',
             'floor' => 'nullable|string|max:10',
             'apartment' => 'nullable|string|max:10',
+            'city' => 'required|string|max:100',
             'postal_code' => 'required|string|max:8',
             'province' => 'required|string|max:100',
         ];
@@ -48,6 +49,7 @@ class CreateCompanyRequest extends FormRequest
             'deletion_code.regex' => 'El código debe incluir mayúsculas, minúsculas, números y caracteres especiales (@$!%*#?&)',
             'street.required' => 'La calle es obligatoria',
             'street_number.required' => 'El número de calle es obligatorio',
+            'city.required' => 'La ciudad es obligatoria',
             'postal_code.required' => 'El código postal es obligatorio',
             'province.required' => 'La provincia es obligatoria',
         ];

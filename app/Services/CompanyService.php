@@ -167,20 +167,19 @@ class CompanyService implements CompanyServiceInterface
             }
         }
 
-        $updateData = [
-            'name' => $data['name'] ?? $company->name,
-            'business_name' => $data['business_name'] ?? $company->business_name,
-            'national_id' => $data['national_id'] ?? $company->national_id,
-            'phone' => $data['phone'] ?? $company->phone,
-            'tax_condition' => $data['tax_condition'] ?? $company->tax_condition,
-            'default_sales_point' => $data['default_sales_point'] ?? $company->default_sales_point,
-            'last_invoice_number' => $data['last_invoice_number'] ?? $company->last_invoice_number,
-            'required_approvals' => isset($data['required_approvals']) ? (int)$data['required_approvals'] : $company->required_approvals,
-            'is_perception_agent' => $data['is_perception_agent'] ?? $company->is_perception_agent,
-            'auto_perceptions' => $data['auto_perceptions'] ?? $company->auto_perceptions,
-            'is_retention_agent' => $data['is_retention_agent'] ?? $company->is_retention_agent,
-            'auto_retentions' => $data['auto_retentions'] ?? $company->auto_retentions,
-        ];
+        $updateData = [];
+        
+        if (isset($data['name'])) $updateData['name'] = $data['name'];
+        if (isset($data['business_name'])) $updateData['business_name'] = $data['business_name'];
+        if (isset($data['phone'])) $updateData['phone'] = $data['phone'];
+        if (isset($data['tax_condition'])) $updateData['tax_condition'] = $data['tax_condition'];
+        if (isset($data['default_sales_point'])) $updateData['default_sales_point'] = $data['default_sales_point'];
+        if (isset($data['last_invoice_number'])) $updateData['last_invoice_number'] = $data['last_invoice_number'];
+        if (isset($data['required_approvals'])) $updateData['required_approvals'] = (int)$data['required_approvals'];
+        if (isset($data['is_perception_agent'])) $updateData['is_perception_agent'] = $data['is_perception_agent'];
+        if (isset($data['auto_perceptions'])) $updateData['auto_perceptions'] = $data['auto_perceptions'];
+        if (isset($data['is_retention_agent'])) $updateData['is_retention_agent'] = $data['is_retention_agent'];
+        if (isset($data['auto_retentions'])) $updateData['auto_retentions'] = $data['auto_retentions'];
 
         if (isset($data['street']) || isset($data['street_number']) || isset($data['city']) || isset($data['postal_code']) || isset($data['province'])) {
             $company->address()->updateOrCreate(

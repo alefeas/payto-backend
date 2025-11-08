@@ -167,11 +167,19 @@ class InvoiceRepository implements RepositoryInterface
         }
 
         if (isset($filters['receiver_document'])) {
-            $query->where('receiver_document', $filters['receiver_document']);
+            $query->where(function($q) use ($filters) {
+                $q->whereHas('client', function($q) use ($filters) {
+                    $q->where('document_number', $filters['receiver_document']);
+                })->orWhereHas('receiverCompany', function($q) use ($filters) {
+                    $q->where('national_id', $filters['receiver_document']);
+                });
+            });
         }
 
         if (isset($filters['issuer_document'])) {
-            $query->where('issuer_document', $filters['issuer_document']);
+            $query->whereHas('issuerCompany', function($q) use ($filters) {
+                $q->where('national_id', $filters['issuer_document']);
+            });
         }
 
         if (isset($filters['is_manual_load'])) {

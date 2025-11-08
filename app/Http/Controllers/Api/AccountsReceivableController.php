@@ -56,6 +56,8 @@ class AccountsReceivableController extends Controller
                         'due_date' => $nc->due_date,
                         'client_name' => $clientName,
                         'total' => $nc->total,
+                        'currency' => $nc->currency ?? 'ARS',
+                        'exchange_rate' => $nc->exchange_rate ?? 1,
                         'collected_amount' => $collectedAmount,
                         'pending_amount' => max(0, $nc->total - $collectedAmount),
                         'balance_type' => 'credit', // Saldo negativo - debemos cobrar (redujo nuestra factura original)
@@ -99,6 +101,8 @@ class AccountsReceivableController extends Controller
                         'due_date' => $nd->due_date,
                         'client_name' => $clientName,
                         'total' => $nd->total,
+                        'currency' => $nd->currency ?? 'ARS',
+                        'exchange_rate' => $nd->exchange_rate ?? 1,
                         'collected_amount' => $collectedAmount,
                         'pending_amount' => max(0, $nd->total - $collectedAmount),
                         'balance_type' => 'debit', // Saldo positivo adicional - debemos cobrar

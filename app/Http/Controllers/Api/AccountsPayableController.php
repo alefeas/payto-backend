@@ -166,14 +166,27 @@ class AccountsPayableController extends Controller
         
             // Pagos recientes
             $recentPayments = Payment::where('company_id', $companyId)
-                ->with(['invoice.issuerCompany', 'retentions'])
+                ->with(['invoice.issuerCompany', 'invoice.supplier', 'retentions'])
                 ->orderByDesc('payment_date')
                 ->limit(10)
                 ->get()
                 ->map(function($payment) {
                     $supplierName = 'Proveedor desconocido';
-                    if ($payment->invoice && $payment->invoice->issuerCompany) {
-                        $supplierName = $payment->invoice->issuerCompany->business_name ?? $payment->invoice->issuerCompany->name ?? 'Sin nombre';
+                    $currency = 'ARS';
+                    $exchangeRate = 1;
+                    
+                    if ($payment->invoice) {
+                        $currency = $payment->invoice->currency ?? 'ARS';
+                        $exchangeRate = $payment->invoice->exchange_rate ?? 1;
+                        
+                        if ($payment->invoice->supplier) {
+                            $supplierName = $payment->invoice->supplier->business_name 
+                                ?? ($payment->invoice->supplier->first_name && $payment->invoice->supplier->last_name 
+                                    ? trim($payment->invoice->supplier->first_name . ' ' . $payment->invoice->supplier->last_name) 
+                                    : 'Sin nombre');
+                        } elseif ($payment->invoice->issuerCompany) {
+                            $supplierName = $payment->invoice->issuerCompany->business_name ?? $payment->invoice->issuerCompany->name ?? 'Sin nombre';
+                        }
                     }
                     
                     $retentionsSum = $payment->retentions ? $payment->retentions->sum('amount') : 0;
@@ -183,6 +196,8 @@ class AccountsPayableController extends Controller
                         'date' => $payment->payment_date,
                         'supplier' => $supplierName,
                         'amount' => $payment->amount ?? 0,
+                        'currency' => $currency,
+                        'exchange_rate' => $exchangeRate,
                         'retentions' => $retentionsSum,
                         'net_paid' => ($payment->amount ?? 0) - $retentionsSum,
                         'method' => $payment->payment_method ?? 'unknown',
@@ -605,6 +620,8 @@ class AccountsPayableController extends Controller
                         'due_date' => $nc->due_date,
                         'supplier_name' => $supplierName ?? 'Sin nombre',
                         'total' => $nc->total,
+                        'currency' => $nc->currency ?? 'ARS',
+                        'exchange_rate' => $nc->exchange_rate ?? 1,
                         'balance_type' => 'credit', // A favor nuestro (reduce lo que debemos pagar)
                         'description' => 'Nota de Crédito sin factura asociada',
                     ];
@@ -637,6 +654,8 @@ class AccountsPayableController extends Controller
                         'due_date' => $nd->due_date,
                         'supplier_name' => $supplierName ?? 'Sin nombre',
                         'total' => $nd->total,
+                        'currency' => $nd->currency ?? 'ARS',
+                        'exchange_rate' => $nd->exchange_rate ?? 1,
                         'balance_type' => 'debit', // En contra nuestro (aumenta lo que debemos pagar)
                         'description' => 'Nota de Débito sin factura asociada',
                     ];
