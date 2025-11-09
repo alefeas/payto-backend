@@ -169,6 +169,8 @@ class CompanyConnectionController extends Controller
         $validated = $request->validate([
             'company_unique_id' => 'required|string|exists:companies,unique_id',
             'message' => 'nullable|string|max:500',
+        ], [
+            'company_unique_id.exists' => 'El ID único de empresa seleccionado no es válido.',
         ]);
 
         $targetCompany = Company::where('unique_id', $validated['company_unique_id'])->firstOrFail();
