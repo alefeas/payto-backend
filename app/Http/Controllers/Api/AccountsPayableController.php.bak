@@ -22,8 +22,15 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
-                ->with(['issuerCompany', 'supplier.company', 'payments']);
+                ->where(function($q) {
+                    // Excluir ND/NC pendientes de aprobación (standalone)
+                    $q->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                      ->orWhere(function($q2) {
+                          $q2->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                             ->where('status', '!=', 'pending_approval');
+                      });
+                })
+                ->with(['issuerCompany', 'supplier.company', 'payments'});
             
             if ($requiredApprovals > 0) {
                 $query->where('approvals_received', '>=', $requiredApprovals);
@@ -243,7 +250,14 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
+                ->where(function($q) {
+                    // Excluir ND/NC pendientes de aprobación (standalone)
+                    $q->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                      ->orWhere(function($q2) {
+                          $q2->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                             ->where('status', '!=', 'pending_approval');
+                      });
+                })
                 ->with([
                     'issuerCompany.primaryBankAccount',
                     'issuerCompany.bankAccounts',
