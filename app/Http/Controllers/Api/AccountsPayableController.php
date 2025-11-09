@@ -22,15 +22,8 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->where(function($q) {
-                    // Excluir ND/NC pendientes de aprobación (standalone)
-                    $q->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                      ->orWhere(function($q2) {
-                          $q2->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                             ->where('status', '!=', 'pending_approval');
-                      });
-                })
-                ->with(['issuerCompany', 'supplier.company', 'payments'});
+                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
+                ->with(['issuerCompany', 'supplier.company', 'payments']);
             
             if ($requiredApprovals > 0) {
                 $query->where('approvals_received', '>=', $requiredApprovals);
@@ -250,14 +243,7 @@ class AccountsPayableController extends Controller
             $requiredApprovals = $company->required_approvals ?? 0;
             
             $query = Invoice::where('receiver_company_id', $companyId)
-                ->where(function($q) {
-                    // Excluir ND/NC pendientes de aprobación (standalone)
-                    $q->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                      ->orWhere(function($q2) {
-                          $q2->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                             ->where('status', '!=', 'pending_approval');
-                      });
-                })
+                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
                 ->with([
                     'issuerCompany.primaryBankAccount',
                     'issuerCompany.bankAccounts',
@@ -306,21 +292,16 @@ class AccountsPayableController extends Controller
             $invoices->each(function($invoice) use ($companyId) {
                 $paidAmount = $invoice->payments->sum('amount');
                 
-                // Obtener NC/ND relacionadas con detalles
-                $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+                // Calcular total ajustado considerando NC/ND relacionadas
+                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
-                    ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
-                    ->get();
+                    ->sum('total');
                 
-                $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+                $totalND = Invoice::where('related_invoice_id', $invoice->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
-                    ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
-                    ->get();
-                
-                $totalNC = $creditNotes->sum('total');
-                $totalND = $debitNotes->sum('total');
+                    ->sum('total');
                 
                 $baseTotal = $invoice->total ?? 0;
                 $adjustedTotal = $baseTotal + $totalND - $totalNC; // ND suma, NC resta
@@ -335,10 +316,6 @@ class AccountsPayableController extends Controller
                 
                 $invoice->paid_amount = $paidAmount;
                 $invoice->pending_amount = max(0, $adjustedTotal - $paidAmount); // No negativo
-                $invoice->credit_notes_applied = $creditNotes;
-                $invoice->debit_notes_applied = $debitNotes;
-                $invoice->total_nc = $totalNC;
-                $invoice->total_nd = $totalND;
                 
                 // Add bank data availability flag
                 $hasBankData = false;
