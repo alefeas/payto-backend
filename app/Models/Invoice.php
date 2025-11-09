@@ -227,4 +227,39 @@ class Invoice extends Model
     {
         return $this->afip_status === 'approved' && $this->hasValidCae();
     }
+
+    public function getBalanceBreakdown(): array
+    {
+        $creditNotes = $this->creditNotes()
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $debitNotes = $this->debitNotes()
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $totalCreditNotes = $creditNotes->sum('total');
+        $totalDebitNotes = $debitNotes->sum('total');
+        
+        return [
+            'original_amount' => (float) $this->total,
+            'credit_notes' => $creditNotes->map(fn($cn) => [
+                'id' => $cn->id,
+                'number' => $cn->number,
+                'amount' => (float) $cn->total,
+                'issue_date' => $cn->issue_date->format('Y-m-d'),
+            ])->toArray(),
+            'total_credit_notes' => (float) $totalCreditNotes,
+            'debit_notes' => $debitNotes->map(fn($dn) => [
+                'id' => $dn->id,
+                'number' => $dn->number,
+                'amount' => (float) $dn->total,
+                'issue_date' => $dn->issue_date->format('Y-m-d'),
+            ])->toArray(),
+            'total_debit_notes' => (float) $totalDebitNotes,
+            'balance_pending' => (float) ($this->total + $totalDebitNotes - $totalCreditNotes),
+        ];
+    }
 }

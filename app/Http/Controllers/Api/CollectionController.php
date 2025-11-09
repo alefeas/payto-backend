@@ -103,32 +103,7 @@ class CollectionController extends Controller
             if ($collection->status === 'confirmed') {
                 $invoice = Invoice::find($collection->invoice_id);
                 if ($invoice) {
-                    $totalCollected = Collection::where('invoice_id', $invoice->id)
-                        ->where('status', 'confirmed')
-                        ->sum('amount');
-                    
-                    // Calcular balance pendiente (Total + ND - NC)
-                    $totalNC = Invoice::where('related_invoice_id', $invoice->id)
-                        ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                        ->where('status', '!=', 'cancelled')
-                        ->where('afip_status', 'approved')
-                        ->sum('total');
-                    
-                    $totalND = Invoice::where('related_invoice_id', $invoice->id)
-                        ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                        ->where('status', '!=', 'cancelled')
-                        ->where('afip_status', 'approved')
-                        ->sum('total');
-                    
-                    $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
-                    
-                    if ($totalCollected >= $balancePending) {
-                        $companyStatuses = $invoice->company_statuses ?: [];
-                        $companyStatuses[(string)$companyId] = 'collected';
-                        $invoice->company_statuses = $companyStatuses;
-                        $invoice->status = 'collected';
-                        $invoice->save();
-                    }
+                    $this->updateInvoiceCollectionStatus($invoice, $companyId);
                 }
             }
             
@@ -204,32 +179,7 @@ class CollectionController extends Controller
 
             // Actualizar company_statuses JSON para esta empresa
             $invoice = $collection->invoice;
-            $totalCollected = Collection::where('invoice_id', $invoice->id)
-                ->where('status', 'confirmed')
-                ->sum('amount');
-            
-            // Calcular balance pendiente (Total + ND - NC)
-            $totalNC = Invoice::where('related_invoice_id', $invoice->id)
-                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                ->where('status', '!=', 'cancelled')
-                ->where('afip_status', 'approved')
-                ->sum('total');
-            
-            $totalND = Invoice::where('related_invoice_id', $invoice->id)
-                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                ->where('status', '!=', 'cancelled')
-                ->where('afip_status', 'approved')
-                ->sum('total');
-            
-            $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
-            
-            if ($totalCollected >= $balancePending) {
-                $companyStatuses = $invoice->company_statuses ?: [];
-                $companyStatuses[(string)$companyId] = 'collected';
-                $invoice->company_statuses = $companyStatuses;
-                $invoice->status = 'collected';
-                $invoice->save();
-            }
+            $this->updateInvoiceCollectionStatus($invoice, $companyId);
 
             DB::commit();
 
@@ -278,34 +228,7 @@ class CollectionController extends Controller
             // Recalcular company_statuses JSON
             $invoice = Invoice::find($invoiceId);
             if ($invoice) {
-                $totalCollected = Collection::where('invoice_id', $invoice->id)
-                    ->where('status', 'confirmed')
-                    ->sum('amount');
-                
-                // Calcular balance pendiente (Total + ND - NC)
-                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
-                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                    ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
-                    ->sum('total');
-                
-                $totalND = Invoice::where('related_invoice_id', $invoice->id)
-                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                    ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
-                    ->sum('total');
-                
-                $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
-                
-                $companyStatuses = $invoice->company_statuses ?: [];
-                if ($totalCollected < $balancePending) {
-                    $companyStatuses[(string)$companyId] = 'issued';
-                } else {
-                    $companyStatuses[(string)$companyId] = 'collected';
-                }
-                $invoice->company_statuses = $companyStatuses;
-                $invoice->status = $companyStatuses[(string)$companyId];
-                $invoice->save();
+                $this->updateInvoiceCollectionStatus($invoice, $companyId);
             }
 
             DB::commit();
@@ -340,34 +263,7 @@ class CollectionController extends Controller
             // Recalcular company_statuses JSON
             $invoice = Invoice::find($invoiceId);
             if ($invoice) {
-                $totalCollected = Collection::where('invoice_id', $invoice->id)
-                    ->where('status', 'confirmed')
-                    ->sum('amount');
-                
-                // Calcular balance pendiente (Total + ND - NC)
-                $totalNC = Invoice::where('related_invoice_id', $invoice->id)
-                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                    ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
-                    ->sum('total');
-                
-                $totalND = Invoice::where('related_invoice_id', $invoice->id)
-                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                    ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
-                    ->sum('total');
-                
-                $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
-                
-                $companyStatuses = $invoice->company_statuses ?: [];
-                if ($totalCollected < $balancePending) {
-                    $companyStatuses[(string)$companyId] = 'issued';
-                } else {
-                    $companyStatuses[(string)$companyId] = 'collected';
-                }
-                $invoice->company_statuses = $companyStatuses;
-                $invoice->status = $companyStatuses[(string)$companyId];
-                $invoice->save();
+                $this->updateInvoiceCollectionStatus($invoice, $companyId);
             }
 
             DB::commit();
@@ -388,5 +284,48 @@ class CollectionController extends Controller
             DB::rollBack();
             return response()->json(['error' => 'Error rejecting collection'], 500);
         }
+    }
+
+    private function updateInvoiceCollectionStatus(Invoice $invoice, string $companyId): void
+    {
+        $totalCollected = Collection::where('invoice_id', $invoice->id)
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        // Calcular balance pendiente (Total + ND - NC)
+        $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->sum('total');
+        
+        $totalND = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->sum('total');
+        
+        $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+        
+        $companyStatuses = $invoice->company_statuses ?: [];
+        
+        // Determinar estado según balance y cobros
+        if ($totalCollected >= $balancePending && $balancePending > 0) {
+            // Cobrado completamente
+            $companyStatuses[(string)$companyId] = 'collected';
+        } elseif ($totalCollected > 0 && $balancePending < 0) {
+            // Cobró de más (tiene saldo a favor del cliente)
+            $companyStatuses[(string)$companyId] = 'overpaid';
+        } elseif ($balancePending > 0) {
+            // Pendiente de cobro
+            $companyStatuses[(string)$companyId] = 'issued';
+        } else {
+            // Balance 0 o negativo sin cobros
+            $companyStatuses[(string)$companyId] = 'issued';
+        }
+        
+        $invoice->company_statuses = $companyStatuses;
+        $invoice->status = $companyStatuses[(string)$companyId];
+        $invoice->save();
     }
 }

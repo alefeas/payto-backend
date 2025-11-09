@@ -45,6 +45,7 @@ class InvoiceController extends Controller
             'client' => $request->query('client'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
+            'exclude_associated_notes' => $request->query('exclude_associated_notes', false),
         ];
 
         $invoices = $this->invoiceService->getInvoices($companyId, $filters);

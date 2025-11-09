@@ -71,6 +71,11 @@ class InvoiceService
             $query->whereDate('issue_date', '<=', $filters['date_to']);
         }
 
+        // Exclude ND/NC with related_invoice_id (for approval page)
+        if (isset($filters['exclude_associated_notes']) && $filters['exclude_associated_notes']) {
+            $query->whereNull('related_invoice_id');
+        }
+
         $invoices = $query->orderBy('created_at', 'desc')->paginate(20);
 
         // Format invoices for response
@@ -244,6 +249,22 @@ class InvoiceService
         
         // Calculate available_balance (for related invoices - saldo disponible)
         $invoice->available_balance = $invoice->balance_pending ?? $invoice->total ?? 0;
+        
+        // Add associated NC/ND details
+        $invoice->credit_notes_applied = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
+            ->get();
+        
+        $invoice->debit_notes_applied = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
+            ->get();
+        
+        $invoice->total_nc = $invoice->credit_notes_applied->sum('total');
+        $invoice->total_nd = $invoice->debit_notes_applied->sum('total');
         
         // Override approvals_required if company is receiver
         if ($invoice->receiver_company_id === $companyId) {
@@ -486,6 +507,9 @@ class InvoiceService
             $formattedInvoice->withholding_other = $confirmedCollections->sum('withholding_other');
             $formattedInvoice->withholding_other_notes = $confirmedCollections->whereNotNull('withholding_other_notes')->pluck('withholding_other_notes')->filter()->implode(', ');
         }
+
+        // Add balance breakdown (NC/ND details)
+        $formattedInvoice->balance_breakdown = $formattedInvoice->getBalanceBreakdown();
 
         return $formattedInvoice;
     }

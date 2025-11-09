@@ -178,11 +178,35 @@ class PaymentService
             ->where('status', 'confirmed')
             ->sum('amount');
         
+        // Calcular balance pendiente (Total + ND - NC)
+        $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->sum('total');
+        
+        $totalND = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->sum('total');
+        
+        $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+        
         $companyStatuses = $invoice->company_statuses ?: [];
         
-        if ($totalPaid >= $invoice->total) {
+        // Determinar estado según balance y pagos
+        if ($totalPaid >= $balancePending && $balancePending > 0) {
+            // Pagado completamente
             $companyStatuses[(string)$company->id] = 'paid';
+        } elseif ($totalPaid > 0 && $balancePending < 0) {
+            // Pagó de más (tiene saldo a favor)
+            $companyStatuses[(string)$company->id] = 'overpaid';
+        } elseif ($balancePending > 0) {
+            // Pendiente de pago
+            $companyStatuses[(string)$company->id] = 'pending';
         } else {
+            // Balance 0 o negativo sin pagos
             $companyStatuses[(string)$company->id] = 'pending';
         }
         
