@@ -203,6 +203,9 @@ class CompanyConnectionController extends Controller
             'requested_by' => auth()->id(),
         ]);
 
+        // Notificar a la empresa receptora
+        \App\Helpers\NotificationHelper::notifyConnectionRequest($connection, auth()->id());
+
         // Auditoría empresa: solicitud de conexión enviada
         app(\App\Services\AuditService::class)->log(
             (string) $companyId,
@@ -240,6 +243,9 @@ class CompanyConnectionController extends Controller
             'connected_at' => now(),
         ]);
 
+        // Notificar a la empresa que envió la solicitud
+        \App\Helpers\NotificationHelper::notifyConnectionAccepted($connection, auth()->id());
+
         // Auditoría empresa: conexión aceptada
         app(\App\Services\AuditService::class)->log(
             (string) $companyId,
@@ -271,6 +277,9 @@ class CompanyConnectionController extends Controller
         if (!in_array($connection->status, ['pending_sent', 'pending_received'])) {
             return response()->json(['message' => 'Esta solicitud ya fue procesada'], 422);
         }
+
+        // Notificar a la empresa que envió la solicitud
+        \App\Helpers\NotificationHelper::notifyConnectionRejected($connection, auth()->id());
 
         $connection->forceDelete();
 

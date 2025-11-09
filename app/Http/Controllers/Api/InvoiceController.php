@@ -423,11 +423,15 @@ class InvoiceController extends Controller
     {
         $company = Company::findOrFail($companyId);
         
-        $invoice = $this->invoiceService->getInvoice($companyId, $id);
-
-        $this->authorize('view', $invoice);
-
-        return response()->json($invoice);
+        try {
+            $invoice = $this->invoiceService->getInvoice($companyId, $id);
+            $this->authorize('view', $invoice);
+            return response()->json($invoice);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'message' => 'La factura no existe o fue eliminada',
+            ], 404);
+        }
     }
 
     public function destroy($companyId, $id)

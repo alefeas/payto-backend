@@ -289,34 +289,128 @@ class CompanyService implements CompanyServiceInterface
 
     public function deleteCompany(string $companyId, string $deletionCode, string $userId): bool
     {
-        $company = Company::whereHas('members', function ($query) use ($userId) {
-            $query->where('user_id', $userId)
-                  ->where('role', 'owner')
-                  ->where('is_active', true);
-        })->findOrFail($companyId);
+        $company = Company::with(['address', 'issuedInvoices', 'receivedInvoices'])
+            ->whereHas('members', function ($query) use ($userId) {
+                $query->where('user_id', $userId)
+                      ->where('role', 'owner')
+                      ->where('is_active', true);
+            })->findOrFail($companyId);
 
         if (!Hash::check($deletionCode, $company->deletion_code)) {
             throw new BadRequestException('Código de eliminación incorrecto');
         }
 
-        // Verificar si la empresa tiene facturas asociadas
-        $hasInvoices = $company->issuedInvoices()->exists() || $company->receivedInvoices()->exists();
-        
-        $auditMessage = $hasInvoices 
-            ? "Perfil fiscal {$company->name} eliminado - facturas y datos contables preservados para mantener integridad del sistema"
-            : "Perfil fiscal {$company->name} eliminado - no tenía facturas asociadas";
+        \DB::beginTransaction();
+        try {
+            // 1. Convertir facturas EMITIDAS por esta empresa → crear proveedores en receptores
+            $issuedInvoices = $company->issuedInvoices;
+            $affectedReceivers = [];
+            
+            foreach ($issuedInvoices as $invoice) {
+                if ($invoice->receiver_company_id && $invoice->receiver_company_id !== $companyId) {
+                    $receiverCompanyId = $invoice->receiver_company_id;
+                    
+                    // Crear proveedor externo en la empresa receptora
+                    $supplier = \App\Models\Supplier::firstOrCreate(
+                        [
+                            'company_id' => $receiverCompanyId,
+                            'document_number' => $company->national_id,
+                        ],
+                        [
+                            'document_type' => 'CUIT',
+                            'business_name' => $company->name,
+                            'tax_condition' => $company->tax_condition ?? 'registered_taxpayer',
+                            'email' => $company->email ?? null,
+                            'phone' => $company->phone ?? null,
+                            'address' => $company->address ? ($company->address->street . ' ' . $company->address->street_number) : null,
+                            'city' => $company->address->city ?? null,
+                            'province' => $company->address->province ?? null,
+                            'postal_code' => $company->address->postal_code ?? null,
+                        ]
+                    );
+                    
+                    // Actualizar factura: cambiar de empresa conectada a proveedor externo
+                    $invoice->update([
+                        'supplier_id' => $supplier->id,
+                        'issuer_name' => $company->name,
+                        'issuer_document' => $company->national_id,
+                        'manual_supplier' => true,
+                    ]);
+                    
+                    $affectedReceivers[$receiverCompanyId] = true;
+                }
+            }
+            
+            // 2. Convertir facturas RECIBIDAS por esta empresa → crear clientes en emisores
+            $receivedInvoices = $company->receivedInvoices;
+            $affectedIssuers = [];
+            
+            foreach ($receivedInvoices as $invoice) {
+                if ($invoice->issuer_company_id && $invoice->issuer_company_id !== $companyId) {
+                    $issuerCompanyId = $invoice->issuer_company_id;
+                    
+                    // Crear cliente externo en la empresa emisora
+                    $client = \App\Models\Client::firstOrCreate(
+                        [
+                            'company_id' => $issuerCompanyId,
+                            'document_number' => $company->national_id,
+                        ],
+                        [
+                            'document_type' => 'CUIT',
+                            'business_name' => $company->name,
+                            'tax_condition' => $company->tax_condition ?? 'registered_taxpayer',
+                            'email' => $company->email ?? null,
+                            'phone' => $company->phone ?? null,
+                            'address' => $company->address ? ($company->address->street . ' ' . $company->address->street_number) : null,
+                            'city' => $company->address->city ?? null,
+                            'province' => $company->address->province ?? null,
+                            'postal_code' => $company->address->postal_code ?? null,
+                        ]
+                    );
+                    
+                    // Actualizar factura: cambiar de empresa conectada a cliente externo
+                    $invoice->update([
+                        'client_id' => $client->id,
+                        'receiver_name' => $company->name,
+                        'receiver_document' => $company->national_id,
+                    ]);
+                    
+                    $affectedIssuers[$issuerCompanyId] = true;
+                }
+            }
+            
+            $hasInvoices = $issuedInvoices->count() > 0 || $receivedInvoices->count() > 0;
+            $auditMessage = $hasInvoices 
+                ? "Perfil fiscal {$company->name} eliminado - {$issuedInvoices->count()} facturas emitidas y {$receivedInvoices->count()} recibidas convertidas a externos"
+                : "Perfil fiscal {$company->name} eliminado - no tenía facturas asociadas";
 
-        $this->auditService->log(
-            $companyId,
-            $userId,
-            'company.deleted',
-            $auditMessage,
-            'Company',
-            $companyId
-        );
+            $this->auditService->log(
+                $companyId,
+                $userId,
+                'company.deleted',
+                $auditMessage,
+                'Company',
+                $companyId,
+                [
+                    'issued_invoices' => $issuedInvoices->count(),
+                    'received_invoices' => $receivedInvoices->count(),
+                    'affected_receivers' => count($affectedReceivers),
+                    'affected_issuers' => count($affectedIssuers),
+                ]
+            );
 
-        $company->delete();
-        return true;
+            $company->delete();
+            \DB::commit();
+            return true;
+        } catch (\Exception $e) {
+            \DB::rollBack();
+            \Log::error('Error deleting company', [
+                'company_id' => $companyId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
     }
 
     private function formatCompanyData(Company $company): array

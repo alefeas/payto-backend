@@ -321,4 +321,102 @@ class NotificationHelper
             $excludeUserId
         );
     }
+
+    /**
+     * Notify when a new member joins the company
+     */
+    public static function notifyMemberJoined(string $companyId, $newMember, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $memberName = $newMember->user->name ?? 'Nuevo miembro';
+        $role = $newMember->role ?? 'operator';
+        
+        $roleNames = [
+            'owner' => 'Dueño',
+            'administrator' => 'Administrador',
+            'financial_director' => 'Director Financiero',
+            'accountant' => 'Contador',
+            'approver' => 'Aprobador',
+            'operator' => 'Operador',
+            'viewer' => 'Visualizador',
+        ];
+        
+        $roleName = $roleNames[$role] ?? $role;
+        
+        $service->createForCompanyMembers(
+            $companyId,
+            'member_joined',
+            'Nuevo miembro en la empresa',
+            "{$memberName} se unió como {$roleName}",
+            [
+                'entityType' => 'member',
+                'entityId' => $newMember->id,
+                'memberName' => $memberName,
+                'role' => $role,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when a member leaves the company
+     */
+    public static function notifyMemberLeft(string $companyId, $member, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $memberName = $member->user->name ?? 'Miembro';
+        
+        $service->createForCompanyMembers(
+            $companyId,
+            'member_left',
+            'Miembro dejó la empresa',
+            "{$memberName} ya no es parte de la empresa",
+            [
+                'entityType' => 'member',
+                'entityId' => $member->id,
+                'memberName' => $memberName,
+            ],
+            $excludeUserId
+        );
+    }
+
+    /**
+     * Notify when a member's role changes
+     */
+    public static function notifyMemberRoleChanged(string $companyId, $member, string $oldRole, string $newRole, $excludeUserId = null)
+    {
+        $service = app(NotificationService::class);
+        
+        $memberName = $member->user->name ?? 'Miembro';
+        
+        $roleNames = [
+            'owner' => 'Dueño',
+            'administrator' => 'Administrador',
+            'financial_director' => 'Director Financiero',
+            'accountant' => 'Contador',
+            'approver' => 'Aprobador',
+            'operator' => 'Operador',
+            'viewer' => 'Visualizador',
+        ];
+        
+        $oldRoleName = $roleNames[$oldRole] ?? $oldRole;
+        $newRoleName = $roleNames[$newRole] ?? $newRole;
+        
+        $service->createForCompanyMembers(
+            $companyId,
+            'member_role_changed',
+            'Rol de miembro actualizado',
+            "El rol de {$memberName} cambió de {$oldRoleName} a {$newRoleName}",
+            [
+                'entityType' => 'member',
+                'entityId' => $member->id,
+                'memberName' => $memberName,
+                'oldRole' => $oldRole,
+                'newRole' => $newRole,
+            ],
+            $excludeUserId
+        );
+    }
 }
