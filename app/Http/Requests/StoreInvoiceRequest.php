@@ -49,7 +49,7 @@ class StoreInvoiceRequest extends FormRequest
             'items.*.quantity' => 'required|numeric|min:0.01|max:999999',
             'items.*.unit_price' => 'required|numeric|min:0|max:999999999',
             'items.*.discount_percentage' => 'nullable|numeric|min:0|max:100',
-            'items.*.tax_rate' => 'nullable|numeric|min:0|max:100',
+            'items.*.tax_rate' => 'nullable|numeric|min:-2|max:100',
             'perceptions' => 'nullable|array',
             'perceptions.*.type' => 'required|string|max:100',
             'perceptions.*.name' => 'required|string|max:100',

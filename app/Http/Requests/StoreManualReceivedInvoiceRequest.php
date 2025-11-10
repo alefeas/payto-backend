@@ -82,7 +82,7 @@ class StoreManualReceivedInvoiceRequest extends FormRequest
             'items.*.unit_price.numeric' => 'El precio unitario debe ser un número.',
             'items.*.unit_price.min' => 'El precio unitario debe ser mayor o igual a 0.',
             'items.*.tax_rate.numeric' => 'La tasa de impuesto debe ser un número.',
-            'items.*.tax_rate.min' => 'La tasa de impuesto debe ser mayor o igual a 0.',
+            'items.*.tax_rate.min' => 'La tasa de impuesto debe ser mayor o igual a -2 (use -1 para Exento, -2 para No Gravado).',
             'items.*.tax_rate.max' => 'La tasa de impuesto no puede superar el 100%.',
         ];
     }

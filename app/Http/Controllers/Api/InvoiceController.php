@@ -248,7 +248,18 @@ class InvoiceController extends Controller
                 $itemBase = $item['quantity'] * $item['unit_price'];
                 $itemDiscount = $itemBase * ($discount / 100);
                 $itemSubtotal = $itemBase - $itemDiscount;
-                // Exento (-1) y No Gravado (-2) tienen IVA = 0
+                
+                $taxCategory = 'taxed';
+                if ($taxRate == -1) {
+                    $taxCategory = 'exempt';
+                    $taxRate = 0;
+                } elseif ($taxRate == -2) {
+                    $taxCategory = 'not_taxed';
+                    $taxRate = 0;
+                } elseif ($taxRate == 0) {
+                    $taxCategory = 'taxed';
+                }
+                
                 $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
 
                 $invoice->items()->create([
@@ -257,6 +268,7 @@ class InvoiceController extends Controller
                     'unit_price' => $item['unit_price'],
                     'discount_percentage' => $discount,
                     'tax_rate' => $taxRate,
+                    'tax_category' => $taxCategory,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
                     'order_index' => $index,
@@ -489,20 +501,6 @@ class InvoiceController extends Controller
                 ->delete();
             
             DB::commit();
-
-            // Auditoría empresa: carga manual de factura recibida
-            app(\App\Services\AuditService::class)->log(
-                (string) $companyId,
-                (string) (auth()->id() ?? ''),
-                'invoice.manual_received.created',
-                'Factura recibida cargada manualmente',
-                'Invoice',
-                (string) $invoice->id,
-                [
-                    'supplier_id' => $supplierId,
-                    'total' => $total,
-                ]
-            );
             return response()->json(['message' => 'Todas las facturas fueron eliminadas']);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -896,14 +894,26 @@ class InvoiceController extends Controller
                 $itemBase = $item['quantity'] * $item['unit_price'];
                 $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
                 $itemSubtotal = $itemBase - $itemDiscount;
-                $itemTax = $itemSubtotal * (($item['tax_rate'] ?? 0) / 100);
+                $taxRate = $item['tax_rate'] ?? 0;
+                
+                $taxCategory = 'taxed';
+                if ($taxRate == -1) {
+                    $taxCategory = 'exempt';
+                    $taxRate = 0;
+                } elseif ($taxRate == -2) {
+                    $taxCategory = 'not_taxed';
+                    $taxRate = 0;
+                }
+                
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
 
                 $invoice->items()->create([
                     'description' => $item['description'],
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
                     'discount_percentage' => $item['discount_percentage'] ?? 0,
-                    'tax_rate' => $item['tax_rate'] ?? 0,
+                    'tax_rate' => $taxRate,
+                    'tax_category' => $taxCategory,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
                     'order_index' => $index,
@@ -930,20 +940,6 @@ class InvoiceController extends Controller
             }
             
             DB::commit();
-
-            // Auditoría empresa: creación de factura recibida
-            app(\App\Services\AuditService::class)->log(
-                (string) $companyId,
-                (string) (auth()->id() ?? ''),
-                'invoice.received.created',
-                'Factura recibida creada',
-                'Invoice',
-                (string) $invoice->id,
-                [
-                    'supplier_id' => $supplier->id,
-                    'total' => $total,
-                ]
-            );
 
             // Determinar si se creó un cliente automáticamente
             $autoCreatedClient = false;
@@ -1289,12 +1285,19 @@ class InvoiceController extends Controller
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
             
-            // Check for duplicate: same receiver + type + sales_point + number
+            // Check for duplicate: same receiver + issuer + type + sales_point + number
             $existingInvoice = Invoice::withTrashed()
                 ->where('receiver_company_id', $companyId)
                 ->where('type', $invoiceTypeInternal)
                 ->where('sales_point', $salesPoint)
                 ->where('voucher_number', $voucherNumber)
+                ->where(function($q) use ($supplierId, $supplierDocument) {
+                    if ($supplierId) {
+                        $q->where('supplier_id', $supplierId);
+                    } elseif ($supplierDocument) {
+                        $q->where('issuer_document', $supplierDocument);
+                    }
+                })
                 ->first();
                 
             if ($existingInvoice) {
@@ -1356,14 +1359,26 @@ class InvoiceController extends Controller
                 $itemBase = $item['quantity'] * $item['unit_price'];
                 $itemDiscount = $itemBase * (($item['discount_percentage'] ?? 0) / 100);
                 $itemSubtotal = $itemBase - $itemDiscount;
-                $itemTax = $itemSubtotal * (($item['tax_rate'] ?? 0) / 100);
+                $taxRate = $item['tax_rate'] ?? 0;
+                
+                $taxCategory = 'taxed';
+                if ($taxRate == -1) {
+                    $taxCategory = 'exempt';
+                    $taxRate = 0;
+                } elseif ($taxRate == -2) {
+                    $taxCategory = 'not_taxed';
+                    $taxRate = 0;
+                }
+                
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
 
                 $invoice->items()->create([
                     'description' => $item['description'],
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
                     'discount_percentage' => $item['discount_percentage'] ?? 0,
-                    'tax_rate' => $item['tax_rate'] ?? 0,
+                    'tax_rate' => $taxRate,
+                    'tax_category' => $taxCategory,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
                     'order_index' => $index,
@@ -1544,13 +1559,25 @@ class InvoiceController extends Controller
             // Crear items
             foreach ($validated['items'] as $index => $item) {
                 $itemSubtotal = $item['quantity'] * $item['unit_price'];
-                $itemTax = $itemSubtotal * ($item['tax_rate'] / 100);
+                $taxRate = $item['tax_rate'] ?? 0;
+                
+                $taxCategory = 'taxed';
+                if ($taxRate == -1) {
+                    $taxCategory = 'exempt';
+                    $taxRate = 0;
+                } elseif ($taxRate == -2) {
+                    $taxCategory = 'not_taxed';
+                    $taxRate = 0;
+                }
+                
+                $itemTax = ($taxRate > 0) ? $itemSubtotal * ($taxRate / 100) : 0;
 
                 $invoice->items()->create([
                     'description' => $item['description'],
                     'quantity' => $item['quantity'],
                     'unit_price' => $item['unit_price'],
-                    'tax_rate' => $item['tax_rate'],
+                    'tax_rate' => $taxRate,
+                    'tax_category' => $taxCategory,
                     'tax_amount' => $itemTax,
                     'subtotal' => $itemSubtotal,
                     'order_index' => $index,
@@ -2271,3 +2298,4 @@ class InvoiceController extends Controller
         $relatedInvoice->save();
     }
 }
+

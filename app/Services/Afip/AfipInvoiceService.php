@@ -729,9 +729,10 @@ class AfipInvoiceService
         
         foreach ($invoice->items as $item) {
             $taxRate = $item->tax_rate;
+            $taxCategory = $item->tax_category ?? 'taxed';
             
-            // Exento (-1) y No Gravado (-2) no van en AlicIva
-            if ($taxRate == -1 || $taxRate == -2) {
+            // Exento y No Gravado no van en AlicIva
+            if ($taxCategory === 'exempt' || $taxCategory === 'not_taxed') {
                 continue;
             }
             

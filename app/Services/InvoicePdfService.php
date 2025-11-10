@@ -253,11 +253,16 @@ class InvoicePdfService
         $lines[] = '';
         $lines[] = 'ITEMS:';
         foreach ($invoice->items as $item) {
+            $taxCategory = $item->tax_category ?? 'taxed';
+            $taxDisplay = $taxCategory === 'exempt' ? 'Exento' : 
+                         ($taxCategory === 'not_taxed' ? 'No Gravado' : 
+                         $item->tax_rate . '%');
+            
             $itemLine = $item->description . '|' . 
                         $item->quantity . '|' . 
                         number_format($item->unit_price, 2, '.', '') . '|' . 
                         ($item->discount_percentage ?? 0) . '%|' . 
-                        $item->tax_rate . '%|' . 
+                        $taxDisplay . '|' . 
                         number_format($item->subtotal, 2, '.', '');
             $lines[] = $itemLine;
         }

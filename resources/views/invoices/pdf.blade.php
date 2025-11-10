@@ -188,10 +188,14 @@
                 <td class="text-right">${{ number_format($item->unit_price, 2) }}</td>
                 <td class="text-right">{{ $item->discount_percentage > 0 ? number_format($item->discount_percentage, 2) . '%' : '-' }}</td>
                 <td class="text-right">
-                    @if($item->tax_rate == -1)
+                    @if(isset($item->tax_category) && $item->tax_category === 'exempt')
                         Exento
-                    @elseif($item->tax_rate == -2)
+                    @elseif(isset($item->tax_category) && $item->tax_category === 'not_taxed')
                         No Grav.
+                    @elseif($item->tax_rate == 0 && isset($item->tax_category) && $item->tax_category === 'taxed')
+                        0.00%
+                    @elseif($item->tax_rate == 0 && !isset($item->tax_category))
+                        Exento
                     @else
                         {{ number_format($item->tax_rate, 2) }}%
                     @endif
@@ -206,8 +210,10 @@
         // Group items by tax rate for IVA breakdown
         $ivaBreakdown = [];
         foreach($invoice->items as $item) {
+            $taxCategory = $item->tax_category ?? 'taxed';
             $rate = $item->tax_rate;
-            if ($rate > 0) {
+            
+            if ($taxCategory !== 'exempt' && $taxCategory !== 'not_taxed' && $rate >= 0) {
                 if (!isset($ivaBreakdown[$rate])) {
                     $ivaBreakdown[$rate] = ['base' => 0, 'tax' => 0];
                 }
