@@ -6,6 +6,16 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class StoreManualReceivedInvoiceRequest extends FormRequest
 {
+    protected function prepareForValidation()
+    {
+        if (is_string($this->items)) {
+            $this->merge(['items' => json_decode($this->items, true)]);
+        }
+        if (is_string($this->perceptions)) {
+            $this->merge(['perceptions' => json_decode($this->perceptions, true)]);
+        }
+    }
+
     public function authorize(): bool
     {
         return true;
@@ -45,6 +55,7 @@ class StoreManualReceivedInvoiceRequest extends FormRequest
             'perceptions.*.amount' => 'nullable|numeric|min:0',
             'perceptions.*.jurisdiction' => 'nullable|string|max:100',
             'perceptions.*.base_type' => 'nullable|in:net,total,vat',
+            'attachment' => 'nullable|file|mimes:pdf|max:10240',
         ];
     }
 

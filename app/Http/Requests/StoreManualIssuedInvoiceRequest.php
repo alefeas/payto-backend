@@ -6,6 +6,13 @@ use Illuminate\Foundation\Http\FormRequest;
 
 class StoreManualIssuedInvoiceRequest extends FormRequest
 {
+    protected function prepareForValidation()
+    {
+        if (is_string($this->items)) {
+            $this->merge(['items' => json_decode($this->items, true)]);
+        }
+    }
+
     public function authorize(): bool
     {
         return true;
@@ -40,6 +47,7 @@ class StoreManualIssuedInvoiceRequest extends FormRequest
             'cae_due_date' => 'nullable|date|required_with:cae',
             'service_date_from' => 'nullable|date|required_if:concept,services,products_services',
             'service_date_to' => 'nullable|date|after_or_equal:service_date_from|required_if:concept,services,products_services',
+            'attachment' => 'nullable|file|mimes:pdf|max:10240',
         ];
     }
 

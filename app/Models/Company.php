@@ -53,8 +53,14 @@ class Company extends Model
         'verified_at' => 'datetime',
     ];
 
+    public function getTaxConditionAttribute()
+    {
+        return $this->attributes['tax_regime'] ?? $this->attributes['tax_condition'] ?? null;
+    }
+
     public function setTaxConditionAttribute($value)
     {
+        $this->attributes['tax_regime'] = empty($value) ? null : $value;
         $this->attributes['tax_condition'] = empty($value) ? null : $value;
     }
 

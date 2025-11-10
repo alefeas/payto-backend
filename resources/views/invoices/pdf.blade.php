@@ -49,6 +49,21 @@
     <div class="company-info">
         <h3 style="margin: 0 0 10px 0; color: #1e40af; font-size: 16px;">{{ $company->name }}</h3>
         <p style="margin: 5px 0;"><strong>CUIT:</strong> {{ $company->national_id }}</p>
+        <p style="margin: 5px 0;"><strong>Condición IVA:</strong> 
+        @if($company->tax_condition)
+            @php
+                $taxConditions = [
+                    'registered_taxpayer' => 'Responsable Inscripto',
+                    'monotax' => 'Monotributista',
+                    'exempt' => 'Exento',
+                    'final_consumer' => 'Consumidor Final',
+                ];
+                echo $taxConditions[$company->tax_condition] ?? 'No especificado';
+            @endphp
+        @else
+            <span style="color: #94a3b8;">No especificado</span>
+        @endif
+        </p>
         <p style="margin: 5px 0;"><strong>Domicilio Comercial:</strong> 
         @if($address && $address->street)
             {{ $address->street }} {{ $address->street_number ?? '' }}

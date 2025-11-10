@@ -920,6 +920,17 @@ class InvoiceController extends Controller
                 ]);
             }
 
+            // Si es NC/ND con factura relacionada, validar
+            // Handle attachment if provided
+            if ($request->hasFile('attachment')) {
+                $file = $request->file('attachment');
+                $path = $file->store('invoices/attachments', 'public');
+                $invoice->update([
+                    'attachment_path' => $path,
+                    'attachment_original_name' => $file->getClientOriginalName(),
+                ]);
+            }
+
             // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
             if (isset($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::find($validated['related_invoice_id']);
@@ -1183,7 +1194,7 @@ class InvoiceController extends Controller
                                 // Copy bank account data
                                 'bank_name' => $primaryBankAccount->bank_name ?? null,
                                 'bank_cbu' => $primaryBankAccount->cbu ?? $relatedInvoice->issuerCompany->cbu ?? null,
-                                'bank_account_type' => $primaryBankAccount->account_type ?? null,
+                                'bank_account_type' => $primaryBankAccount && $primaryBankAccount->account_type ? (match($primaryBankAccount->account_type) { 'caja_ahorro' => 'CA', 'cuenta_corriente' => 'CC', default => null }) : null,
                                 'bank_alias' => $primaryBankAccount->alias ?? null,
                             ]
                         );
@@ -1193,7 +1204,7 @@ class InvoiceController extends Controller
                             (empty($supplier->bank_cbu) || empty($supplier->bank_account_number))) {
                             $supplier->bank_name = $primaryBankAccount->bank_name ?? $supplier->bank_name;
                             $supplier->bank_cbu = $primaryBankAccount->cbu ?? $relatedInvoice->issuerCompany->cbu ?? $supplier->bank_cbu;
-                            $supplier->bank_account_type = $primaryBankAccount->account_type ?? $supplier->bank_account_type;
+                            $supplier->bank_account_type = $primaryBankAccount && $primaryBankAccount->account_type ? (match($primaryBankAccount->account_type) { 'caja_ahorro' => 'CA', 'cuenta_corriente' => 'CC', default => null }) : $supplier->bank_account_type;
                             $supplier->bank_alias = $primaryBankAccount->alias ?? $supplier->bank_alias;
                             $supplier->save();
                         }
@@ -1247,7 +1258,7 @@ class InvoiceController extends Controller
                         // Copy bank account data
                         'bank_name' => $primaryBankAccount->bank_name ?? null,
                         'bank_cbu' => $primaryBankAccount->cbu ?? $issuerCompany->cbu ?? null,
-                        'bank_account_type' => $primaryBankAccount->account_type ?? null,
+                        'bank_account_type' => $primaryBankAccount && $primaryBankAccount->account_type ? (match($primaryBankAccount->account_type) { 'caja_ahorro' => 'CA', 'cuenta_corriente' => 'CC', default => null }) : null,
                         'bank_alias' => $primaryBankAccount->alias ?? null,
                     ]
                 );
@@ -1257,7 +1268,7 @@ class InvoiceController extends Controller
                     (empty($supplier->bank_cbu) || empty($supplier->bank_account_number))) {
                     $supplier->bank_name = $primaryBankAccount->bank_name ?? $supplier->bank_name;
                     $supplier->bank_cbu = $primaryBankAccount->cbu ?? $issuerCompany->cbu ?? $supplier->bank_cbu;
-                    $supplier->bank_account_type = $primaryBankAccount->account_type ?? $supplier->bank_account_type;
+                    $supplier->bank_account_type = $primaryBankAccount && $primaryBankAccount->account_type ? (match($primaryBankAccount->account_type) { 'caja_ahorro' => 'CA', 'cuenta_corriente' => 'CC', default => null }) : $supplier->bank_account_type;
                     $supplier->bank_alias = $primaryBankAccount->alias ?? $supplier->bank_alias;
                     $supplier->save();
                     
@@ -1407,8 +1418,17 @@ class InvoiceController extends Controller
                     ]);
                 }
             }
+            // Handle attachment if provided
+            if ($request->hasFile('attachment')) {
+                $file = $request->file('attachment');
+                $path = $file->store('invoices/attachments', 'public');
+                $invoice->update([
+                    'attachment_path' => $path,
+                    'attachment_original_name' => $file->getClientOriginalName(),
+                ]);
+            }
 
-            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
+            // Si es NC/ND con factura relacionada, validar que no estǸ pagada/cobrada
             if (isset($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
