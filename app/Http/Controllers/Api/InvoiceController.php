@@ -286,6 +286,23 @@ class InvoiceController extends Controller
                 }
             }
 
+            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
+            if (!empty($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    $companyStatuses = $relatedInvoice->company_statuses ?? [];
+                    foreach ($companyStatuses as $status) {
+                        if (in_array($status, ['paid', 'collected'])) {
+                            DB::rollBack();
+                            return response()->json([
+                                'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                            ], 422);
+                        }
+                    }
+                }
+            }
+
             // Authorize with AFIP
             try {
                 $invoice->load('perceptions');
@@ -907,8 +924,22 @@ class InvoiceController extends Controller
                 ]);
             }
 
-            // Si es NC/ND, actualizar factura relacionada
+            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
             if (isset($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    $companyStatuses = $relatedInvoice->company_statuses ?? [];
+                    foreach ($companyStatuses as $status) {
+                        if (in_array($status, ['paid', 'collected'])) {
+                            DB::rollBack();
+                            return response()->json([
+                                'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                            ], 422);
+                        }
+                    }
+                }
+                
                 $this->invoiceService->updateRelatedInvoiceBalance($validated['related_invoice_id']);
             }
             
@@ -1376,8 +1407,22 @@ class InvoiceController extends Controller
                 }
             }
 
-            // Si es NC/ND, actualizar factura relacionada
+            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
             if (isset($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    $companyStatuses = $relatedInvoice->company_statuses ?? [];
+                    foreach ($companyStatuses as $status) {
+                        if (in_array($status, ['paid', 'collected'])) {
+                            DB::rollBack();
+                            return response()->json([
+                                'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                            ], 422);
+                        }
+                    }
+                }
+                
                 $this->invoiceService->updateRelatedInvoiceBalance($validated['related_invoice_id']);
             }
             
@@ -1922,6 +1967,7 @@ class InvoiceController extends Controller
         
         // Facturas emitidas a través de AFIP (con CAE): incluye emitidas desde el sistema Y sincronizadas de AFIP
         // EXCLUYE facturas manuales sin CAE real (AFIP no permite asociarlas)
+        // EXCLUYE facturas donde CUALQUIER empresa (emisor o receptor) ya la marcó como pagada/cobrada
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->where('afip_status', 'approved')
             ->whereNotNull('afip_cae')
@@ -1931,6 +1977,13 @@ class InvoiceController extends Controller
             })
             ->whereIn('type', $compatibleTypes)
             ->where('status', '!=', 'cancelled')
+            ->where(function($q) use ($companyId) {
+                // Excluir si la propia empresa ya la marcó como cobrada
+                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"collected\"', '\"paid\"'))")
+                  // Excluir si la otra empresa (receptor) ya la marcó como pagada
+                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
+                ;
+            })
             ->with(['client', 'receiverCompany', 'collections'])
             ->orderBy('issue_date', 'desc')
             ->get()
@@ -1998,9 +2051,17 @@ class InvoiceController extends Controller
         }
         
         // Facturas recibidas de ese mismo proveedor
+        // EXCLUYE facturas donde CUALQUIER empresa (emisor o receptor) ya la marcó como pagada/cobrada
         $query = Invoice::where('receiver_company_id', $companyId)
             ->whereIn('type', $compatibleTypes) // Filter by compatible types
-            ->where('status', '!=', 'cancelled');
+            ->where('status', '!=', 'cancelled')
+            ->where(function($q) use ($companyId) {
+                // Excluir si la propia empresa ya la marcó como pagada
+                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"paid\"', '\"collected\"'))")
+                  // Excluir si la otra empresa (emisor) ya la marcó como cobrada
+                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
+                ;
+            });
         
         if (!empty($validated['supplier_id'])) {
             $query->where('supplier_id', $validated['supplier_id']);
@@ -2075,10 +2136,18 @@ class InvoiceController extends Controller
         }
         
         // Facturas emitidas manualmente hacia ese mismo cliente
+        // EXCLUYE facturas donde CUALQUIER empresa (emisor o receptor) ya la marcó como pagada/cobrada
         $query = Invoice::where('issuer_company_id', $companyId)
             ->where('is_manual_load', true)
             ->whereIn('type', $compatibleTypes) // Filter by compatible types
-            ->where('status', '!=', 'cancelled');
+            ->where('status', '!=', 'cancelled')
+            ->where(function($q) use ($companyId) {
+                // Excluir si la propia empresa ya la marcó como cobrada
+                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"collected\"', '\"paid\"'))")
+                  // Excluir si la otra empresa (receptor) ya la marcó como pagada
+                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
+                ;
+            });
         
         if (!empty($validated['client_id'])) {
             $query->where('client_id', $validated['client_id']);
