@@ -401,20 +401,6 @@ class InvoiceController extends Controller
 
             DB::commit();
 
-            // Auditoría empresa: carga manual de factura emitida
-            app(\App\Services\AuditService::class)->log(
-                (string) $companyId,
-                (string) (auth()->id() ?? ''),
-                'invoice.manual_issued.created',
-                'Factura emitida cargada manualmente',
-                'Invoice',
-                (string) $invoice->id,
-                [
-                    'client_id' => $clientId,
-                    'total' => $total,
-                ]
-            );
-
             return response()->json([
                 'message' => 'Factura autorizada por AFIP exitosamente',
                 'invoice' => $invoice->load(['client', 'receiverCompany', 'items', 'perceptions']),
