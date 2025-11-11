@@ -2107,16 +2107,19 @@ class InvoiceController extends Controller
             })
             ->whereIn('type', $compatibleTypes)
             ->where('status', '!=', 'cancelled')
-            ->where(function($q) use ($companyId) {
-                // Excluir si la propia empresa ya la marcó como cobrada
-                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"collected\"', '\"paid\"'))")
-                  // Excluir si la otra empresa (receptor) ya la marcó como pagada
-                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
-                ;
-            })
             ->with(['client', 'receiverCompany', 'collections'])
             ->orderBy('issue_date', 'desc')
             ->get()
+            ->filter(function($inv) use ($companyId) {
+                // Filter out invoices marked as paid/collected by any company
+                $companyStatuses = $inv->company_statuses ?? [];
+                foreach ($companyStatuses as $status) {
+                    if (in_array($status, ['paid', 'collected'])) {
+                        return false;
+                    }
+                }
+                return true;
+            })
             ->map(function($inv) use ($companyId) {
                 // Calculate available_balance (balance_pending)
                 $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
@@ -2130,6 +2133,15 @@ class InvoiceController extends Controller
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
+                
+                // Build receiver name properly
+                $receiverName = $inv->receiver_name;
+                if (!$receiverName && $inv->receiverCompany) {
+                    $receiverName = $inv->receiverCompany->name;
+                }
+                if (!$receiverName && $inv->client) {
+                    $receiverName = $inv->client->business_name ?? trim(($inv->client->first_name ?? '') . ' ' . ($inv->client->last_name ?? ''));
+                }
                 
                 return [
                     'id' => $inv->id,
@@ -2145,9 +2157,7 @@ class InvoiceController extends Controller
                     'concept' => $inv->concept ?? 'products',
                     'service_date_from' => $inv->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $inv->service_date_to?->format('Y-m-d'),
-                    'receiver_name' => $inv->receiver_name ?? $inv->receiverCompany?->name ?? $inv->client?->business_name,
-                    'status' => $inv->status,
-                    'status_label' => $statusLabel,
+                    'receiver_name' => $receiverName ?: 'Sin nombre',
                     'origin' => $origin,
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
@@ -2184,14 +2194,7 @@ class InvoiceController extends Controller
         // EXCLUYE facturas donde CUALQUIER empresa (emisor o receptor) ya la marcó como pagada/cobrada
         $query = Invoice::where('receiver_company_id', $companyId)
             ->whereIn('type', $compatibleTypes) // Filter by compatible types
-            ->where('status', '!=', 'cancelled')
-            ->where(function($q) use ($companyId) {
-                // Excluir si la propia empresa ya la marcó como pagada
-                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"paid\"', '\"collected\"'))")
-                  // Excluir si la otra empresa (emisor) ya la marcó como cobrada
-                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
-                ;
-            });
+            ->where('status', '!=', 'cancelled');
         
         if (!empty($validated['supplier_id'])) {
             $query->where('supplier_id', $validated['supplier_id']);
@@ -2202,6 +2205,16 @@ class InvoiceController extends Controller
         $invoices = $query->with(['supplier'])
             ->orderBy('issue_date', 'desc')
             ->get()
+            ->filter(function($inv) use ($companyId) {
+                // Filter out invoices marked as paid/collected by any company
+                $companyStatuses = $inv->company_statuses ?? [];
+                foreach ($companyStatuses as $status) {
+                    if (in_array($status, ['paid', 'collected'])) {
+                        return false;
+                    }
+                }
+                return true;
+            })
             ->map(function($inv) use ($companyId) {
                 // Calculate available_balance (balance_pending)
                 $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
@@ -2215,6 +2228,12 @@ class InvoiceController extends Controller
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
+                
+                // Build issuer name properly
+                $issuerName = $inv->issuer_name;
+                if (!$issuerName && $inv->supplier) {
+                    $issuerName = $inv->supplier->business_name ?? trim(($inv->supplier->first_name ?? '') . ' ' . ($inv->supplier->last_name ?? ''));
+                }
                 
                 return [
                     'id' => $inv->id,
@@ -2230,9 +2249,7 @@ class InvoiceController extends Controller
                     'concept' => $inv->concept ?? 'products',
                     'service_date_from' => $inv->service_date_from?->format('Y-m-d'),
                     'service_date_to' => $inv->service_date_to?->format('Y-m-d'),
-                    'issuer_name' => $inv->issuer_name ?? $inv->supplier?->business_name,
-                    'status' => $inv->status,
-                    'status_label' => $statusLabel,
+                    'issuer_name' => $issuerName ?: 'Sin nombre',
                     'origin' => $origin,
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
@@ -2270,14 +2287,7 @@ class InvoiceController extends Controller
         $query = Invoice::where('issuer_company_id', $companyId)
             ->where('is_manual_load', true)
             ->whereIn('type', $compatibleTypes) // Filter by compatible types
-            ->where('status', '!=', 'cancelled')
-            ->where(function($q) use ($companyId) {
-                // Excluir si la propia empresa ya la marcó como cobrada
-                $q->whereRaw("(company_statuses IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') IS NULL OR JSON_EXTRACT(company_statuses, '$.\"" . $companyId . "\"') NOT IN ('\"collected\"', '\"paid\"'))")
-                  // Excluir si la otra empresa (receptor) ya la marcó como pagada
-                  ->whereRaw("(company_statuses IS NULL OR NOT EXISTS (SELECT 1 FROM (SELECT JSON_EXTRACT(company_statuses, CONCAT('$.\"', k, '\"')) as status FROM JSON_TABLE(JSON_KEYS(company_statuses), '$[*]' COLUMNS(k VARCHAR(50) PATH '$')) jk WHERE k != '" . $companyId . "') sub WHERE sub.status IN ('\"paid\"', '\"collected\"')))")
-                ;
-            });
+            ->where('status', '!=', 'cancelled');
         
         if (!empty($validated['client_id'])) {
             $query->where('client_id', $validated['client_id']);
@@ -2288,6 +2298,16 @@ class InvoiceController extends Controller
         $invoices = $query->with(['client'])
             ->orderBy('issue_date', 'desc')
             ->get()
+            ->filter(function($inv) use ($companyId) {
+                // Filter out invoices marked as paid/collected by any company
+                $companyStatuses = $inv->company_statuses ?? [];
+                foreach ($companyStatuses as $status) {
+                    if (in_array($status, ['paid', 'collected'])) {
+                        return false;
+                    }
+                }
+                return true;
+            })
             ->map(function($inv) use ($companyId) {
                 // Calculate available_balance (balance_pending)
                 $availableBalance = $this->calculateAvailableBalance($inv, $companyId);
@@ -2301,6 +2321,12 @@ class InvoiceController extends Controller
                     'partially_cancelled' => 'Parcialmente anulada',
                     default => ucfirst($inv->status)
                 };
+                
+                // Build receiver name properly
+                $receiverName = $inv->receiver_name;
+                if (!$receiverName && $inv->client) {
+                    $receiverName = $inv->client->business_name ?? trim(($inv->client->first_name ?? '') . ' ' . ($inv->client->last_name ?? ''));
+                }
                 
                 return [
                     'id' => $inv->id,
@@ -2316,9 +2342,7 @@ class InvoiceController extends Controller
                     'concept' => $inv->concept,
                     'service_date_from' => $inv->service_date_from,
                     'service_date_to' => $inv->service_date_to,
-                    'receiver_name' => $inv->receiver_name ?? $inv->client?->business_name,
-                    'status' => $inv->status,
-                    'status_label' => $statusLabel,
+                    'receiver_name' => $receiverName ?: 'Sin nombre',
                     'origin' => $origin,
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
