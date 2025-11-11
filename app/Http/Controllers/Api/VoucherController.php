@@ -689,9 +689,7 @@ class VoucherController extends Controller
                 'voucher_type' => $voucher->type,
             ]);
         } else if ($relatedInvoice->balance_pending < $relatedInvoice->total) {
-            // Anulación parcial
-            $relatedInvoice->status = 'partially_cancelled';
-            
+            // Anulación parcial - NO cambiar el estado, mantener el original
             $noteType = $category === 'credit_note' ? 'Nota de Crédito' : 'Nota de Débito';
             $existingNotes = $relatedInvoice->notes ?? '';
             $newNote = "\n[" . now()->format('Y-m-d H:i') . "] Ajustada por {$noteType} {$voucher->number}. Nuevo saldo: $" . number_format($relatedInvoice->balance_pending, 2) . ".";

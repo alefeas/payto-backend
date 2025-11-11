@@ -58,6 +58,22 @@ class CollectionController extends Controller
                 } else {
                     $data['invoice']['receiverCompany'] = null;
                 }
+                
+                // Incluir NC/ND asociadas
+                $creditNotes = Invoice::where('related_invoice_id', $collection->invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $debitNotes = Invoice::where('related_invoice_id', $collection->invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $data['invoice']['credit_notes_applied'] = $creditNotes->toArray();
+                $data['invoice']['debit_notes_applied'] = $debitNotes->toArray();
             }
             
             return $data;
@@ -293,17 +309,20 @@ class CollectionController extends Controller
             ->sum('amount');
         
         // Calcular balance pendiente (Total + ND - NC)
-        $totalNC = Invoice::where('related_invoice_id', $invoice->id)
+        $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
             ->where('afip_status', 'approved')
-            ->sum('total');
+            ->get();
         
-        $totalND = Invoice::where('related_invoice_id', $invoice->id)
+        $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
             ->where('afip_status', 'approved')
-            ->sum('total');
+            ->get();
+        
+        $totalNC = $creditNotes->sum('total');
+        $totalND = $debitNotes->sum('total');
         
         $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
         
@@ -313,6 +332,23 @@ class CollectionController extends Controller
         if ($totalCollected >= $balancePending && $balancePending > 0) {
             // Cobrado completamente
             $companyStatuses[(string)$companyId] = 'collected';
+            
+            // Actualizar estado de NC/ND asociadas
+            foreach ($creditNotes as $nc) {
+                $ncStatuses = $nc->company_statuses ?: [];
+                $ncStatuses[(string)$companyId] = 'collected';
+                $nc->company_statuses = $ncStatuses;
+                $nc->status = 'collected';
+                $nc->save();
+            }
+            
+            foreach ($debitNotes as $nd) {
+                $ndStatuses = $nd->company_statuses ?: [];
+                $ndStatuses[(string)$companyId] = 'collected';
+                $nd->company_statuses = $ndStatuses;
+                $nd->status = 'collected';
+                $nd->save();
+            }
         } elseif ($totalCollected > 0 && $balancePending < 0) {
             // Cobró de más (tiene saldo a favor del cliente)
             $companyStatuses[(string)$companyId] = 'overpaid';

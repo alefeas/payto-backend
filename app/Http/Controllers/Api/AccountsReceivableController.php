@@ -11,120 +11,109 @@ use Illuminate\Http\Request;
 class AccountsReceivableController extends Controller
 {
     /**
-     * Get balances including unassociated NC/ND
+     * Get accounts receivable (facturas pendientes de cobro)
      */
     public function getBalances(string $companyId)
     {
         try {
             $company = Company::findOrFail($companyId);
             
-            // NC/ND sin factura asociada (solo emitidas por nuestra empresa)
-            // Estas son saldos pendientes que deben manejarse independientemente
-            $unassociatedCreditNotes = Invoice::where('issuer_company_id', $companyId)
-                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
-                ->whereNull('related_invoice_id')
+            // Obtener todas las facturas emitidas (incluyendo facturas normales, NC y ND)
+            $pendingInvoices = Invoice::where('issuer_company_id', $companyId)
                 ->where('status', '!=', 'cancelled')
-                ->with(['client', 'receiverCompany'])
+                ->with(['client', 'receiverCompany', 'collections', 'creditNotes', 'debitNotes'])
                 ->get()
-                ->map(function($nc) {
-                    $clientName = null;
-                    if ($nc->client) {
-                        $clientName = $nc->client->business_name 
-                            ?? ($nc->client->first_name && $nc->client->last_name 
-                                ? trim($nc->client->first_name . ' ' . $nc->client->last_name) 
-                                : null);
-                    }
-                    if (!$clientName && $nc->receiverCompany) {
-                        $clientName = $nc->receiverCompany->business_name ?? $nc->receiverCompany->name;
-                    }
-                    if (!$clientName) {
-                        $clientName = $nc->receiver_name ?? 'Sin nombre';
-                    }
-                    
-                    // Para NC emitidas, debemos cobrarlas (son saldo negativo para nosotros)
-                    // Calcular si ya fueron cobradas
-                    $collectedAmount = $nc->collections()
+                ->filter(function($invoice) use ($companyId) {
+                    // Calcular monto cobrado
+                    $collectedAmount = $invoice->collections
+                        ->where('company_id', $companyId)
                         ->where('status', 'confirmed')
                         ->sum('amount');
                     
-                    return [
-                        'id' => $nc->id,
-                        'type' => $nc->type,
-                        'number' => $nc->number,
-                        'voucher_number' => ($nc->type ?? 'NC') . ' ' . str_pad($nc->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($nc->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
-                        'issue_date' => $nc->issue_date,
-                        'due_date' => $nc->due_date,
-                        'client_name' => $clientName,
-                        'total' => $nc->total,
-                        'currency' => $nc->currency ?? 'ARS',
-                        'exchange_rate' => $nc->exchange_rate ?? 1,
-                        'collected_amount' => $collectedAmount,
-                        'pending_amount' => max(0, $nc->total - $collectedAmount),
-                        'balance_type' => 'credit', // Saldo negativo - debemos cobrar (redujo nuestra factura original)
-                        'description' => 'Nota de Crédito sin factura asociada',
-                    ];
-                });
-            
-            $unassociatedDebitNotes = Invoice::where('issuer_company_id', $companyId)
-                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
-                ->whereNull('related_invoice_id')
-                ->where('status', '!=', 'cancelled')
-                ->with(['client', 'receiverCompany'])
-                ->get()
-                ->map(function($nd) {
+                    // Calcular NC/ND asociadas (solo para facturas normales)
+                    $totalNC = $invoice->creditNotes
+                        ->where('status', '!=', 'cancelled')
+                        ->sum('total');
+                    
+                    $totalND = $invoice->debitNotes
+                        ->where('status', '!=', 'cancelled')
+                        ->sum('total');
+                    
+                    // Saldo pendiente = Total + ND - NC - Cobrado
+                    $pendingAmount = ($invoice->total ?? 0) + $totalND - $totalNC - $collectedAmount;
+                    
+                    // Solo incluir si tiene saldo pendiente > 0
+                    return $pendingAmount > 0.01;
+                })
+                ->map(function($invoice) use ($companyId) {
                     $clientName = null;
-                    if ($nd->client) {
-                        $clientName = $nd->client->business_name 
-                            ?? ($nd->client->first_name && $nd->client->last_name 
-                                ? trim($nd->client->first_name . ' ' . $nd->client->last_name) 
+                    if ($invoice->client) {
+                        $clientName = $invoice->client->business_name 
+                            ?? ($invoice->client->first_name && $invoice->client->last_name 
+                                ? trim($invoice->client->first_name . ' ' . $invoice->client->last_name) 
                                 : null);
                     }
-                    if (!$clientName && $nd->receiverCompany) {
-                        $clientName = $nd->receiverCompany->business_name ?? $nd->receiverCompany->name;
+                    if (!$clientName && $invoice->receiverCompany) {
+                        $clientName = $invoice->receiverCompany->business_name ?? $invoice->receiverCompany->name;
                     }
                     if (!$clientName) {
-                        $clientName = $nd->receiver_name ?? 'Sin nombre';
+                        $clientName = $invoice->receiver_name ?? 'Sin nombre';
                     }
                     
-                    // Para ND emitidas, debemos cobrarlas (son saldo positivo adicional)
-                    // Calcular si ya fueron cobradas
-                    $collectedAmount = $nd->collections()
+                    // Calcular montos
+                    $collectedAmount = $invoice->collections
+                        ->where('company_id', $companyId)
                         ->where('status', 'confirmed')
                         ->sum('amount');
                     
+                    $totalNC = $invoice->creditNotes
+                        ->where('status', '!=', 'cancelled')
+                        ->sum('total');
+                    
+                    $totalND = $invoice->debitNotes
+                        ->where('status', '!=', 'cancelled')
+                        ->sum('total');
+                    
+                    $adjustedTotal = ($invoice->total ?? 0) + $totalND - $totalNC;
+                    $pendingAmount = $adjustedTotal - $collectedAmount;
+                    
                     return [
-                        'id' => $nd->id,
-                        'type' => $nd->type,
-                        'number' => $nd->number,
-                        'voucher_number' => ($nd->type ?? 'ND') . ' ' . str_pad($nd->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($nd->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
-                        'issue_date' => $nd->issue_date,
-                        'due_date' => $nd->due_date,
+                        'id' => $invoice->id,
+                        'type' => $invoice->type,
+                        'number' => $invoice->number,
+                        'voucher_number' => $invoice->type . ' ' . str_pad($invoice->sales_point ?? 0, 4, '0', STR_PAD_LEFT) . '-' . str_pad($invoice->voucher_number ?? 0, 8, '0', STR_PAD_LEFT),
+                        'issue_date' => $invoice->issue_date,
+                        'due_date' => $invoice->due_date,
                         'client_name' => $clientName,
-                        'total' => $nd->total,
-                        'currency' => $nd->currency ?? 'ARS',
-                        'exchange_rate' => $nd->exchange_rate ?? 1,
+                        'total' => $invoice->total,
+                        'adjusted_total' => $adjustedTotal,
+                        'currency' => $invoice->currency ?? 'ARS',
+                        'exchange_rate' => $invoice->exchange_rate ?? 1,
                         'collected_amount' => $collectedAmount,
-                        'pending_amount' => max(0, $nd->total - $collectedAmount),
-                        'balance_type' => 'debit', // Saldo positivo adicional - debemos cobrar
-                        'description' => 'Nota de Débito sin factura asociada',
+                        'pending_amount' => max(0, $pendingAmount),
+                        'has_nc' => $totalNC > 0,
+                        'has_nd' => $totalND > 0,
+                        'total_nc' => $totalNC,
+                        'total_nd' => $totalND,
                     ];
-                });
+                })
+                ->sortByDesc('due_date')
+                ->values();
             
             // Calcular totales
-            $totalCredits = $unassociatedCreditNotes->sum('pending_amount');
-            $totalDebits = $unassociatedDebitNotes->sum('pending_amount');
-            $netBalance = $totalDebits - $totalCredits; // Positivo = debemos cobrar más, Negativo = tenemos crédito pendiente
+            $totalPending = $pendingInvoices->sum('pending_amount');
+            $totalOverdue = $pendingInvoices->filter(function($inv) {
+                return $inv['due_date'] && Carbon::parse($inv['due_date'])->isPast();
+            })->sum('pending_amount');
             
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'credit_notes' => $unassociatedCreditNotes->values()->toArray(),
-                    'debit_notes' => $unassociatedDebitNotes->values()->toArray(),
+                    'invoices' => $pendingInvoices->toArray(),
                     'summary' => [
-                        'total_credits' => $totalCredits,
-                        'total_debits' => $totalDebits,
-                        'net_balance' => $netBalance,
-                        'net_balance_type' => $netBalance >= 0 ? 'debit' : 'credit',
+                        'total_pending' => $totalPending,
+                        'total_overdue' => $totalOverdue,
+                        'count' => $pendingInvoices->count(),
                     ],
                 ],
             ]);

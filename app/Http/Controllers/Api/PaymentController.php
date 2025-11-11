@@ -54,6 +54,22 @@ class PaymentController extends Controller
                 } else {
                     $data['invoice']['issuerCompany'] = null;
                 }
+                
+                // Incluir NC/ND asociadas
+                $creditNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $debitNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $data['invoice']['credit_notes_applied'] = $creditNotes->toArray();
+                $data['invoice']['debit_notes_applied'] = $debitNotes->toArray();
             }
             
             return $data;
@@ -109,18 +125,7 @@ class PaymentController extends Controller
             if ($payment->status === 'confirmed') {
                 $invoice = Invoice::find($payment->invoice_id);
                 if ($invoice) {
-                    $totalPaid = Payment::where('invoice_id', $invoice->id)
-                        ->where('status', 'confirmed')
-                        ->sum('amount');
-                    
-                    if ($totalPaid >= $invoice->total) {
-                        // Para facturas recibidas, actualizar company_statuses y status global
-                        $companyStatuses = $invoice->company_statuses ?: [];
-                        $companyStatuses[(string)$companyId] = 'paid';
-                        $invoice->company_statuses = $companyStatuses;
-                        $invoice->status = 'paid';
-                        $invoice->save();
-                    }
+                    $this->updateInvoicePaymentStatus($invoice, $companyId);
                 }
             }
 
@@ -243,18 +248,7 @@ class PaymentController extends Controller
 
             // Update invoice status to paid only if fully paid
             $invoice = $payment->invoice;
-            $totalPaid = Payment::where('invoice_id', $invoice->id)
-                ->where('status', 'confirmed')
-                ->sum('amount');
-            
-            if ($totalPaid >= $invoice->total) {
-                // Para facturas recibidas, actualizar company_statuses y status global
-                $companyStatuses = $invoice->company_statuses ?: [];
-                $companyStatuses[(string)$companyId] = 'paid';
-                $invoice->company_statuses = $companyStatuses;
-                $invoice->status = 'paid';
-                $invoice->save();
-            }
+            $this->updateInvoicePaymentStatus($invoice, $companyId);
 
             DB::commit();
 
@@ -309,6 +303,69 @@ class PaymentController extends Controller
         ]);
     }
 
+    private function updateInvoicePaymentStatus(Invoice $invoice, string $companyId): void
+    {
+        $totalPaid = Payment::where('invoice_id', $invoice->id)
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        // Calcular balance pendiente (Total + ND - NC)
+        $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $totalNC = $creditNotes->sum('total');
+        $totalND = $debitNotes->sum('total');
+        
+        $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+        
+        $companyStatuses = $invoice->company_statuses ?: [];
+        
+        // Determinar estado según balance y pagos
+        if ($totalPaid >= $balancePending && $balancePending > 0) {
+            // Pagado completamente
+            $companyStatuses[(string)$companyId] = 'paid';
+            
+            // Actualizar estado de NC/ND asociadas
+            foreach ($creditNotes as $nc) {
+                $ncStatuses = $nc->company_statuses ?: [];
+                $ncStatuses[(string)$companyId] = 'paid';
+                $nc->company_statuses = $ncStatuses;
+                $nc->status = 'paid';
+                $nc->save();
+            }
+            
+            foreach ($debitNotes as $nd) {
+                $ndStatuses = $nd->company_statuses ?: [];
+                $ndStatuses[(string)$companyId] = 'paid';
+                $nd->company_statuses = $ndStatuses;
+                $nd->status = 'paid';
+                $nd->save();
+            }
+        } elseif ($totalPaid > 0 && $balancePending < 0) {
+            // Pagó de más (tiene saldo a favor del proveedor)
+            $companyStatuses[(string)$companyId] = 'overpaid';
+        } elseif ($balancePending > 0) {
+            // Pendiente de pago
+            $companyStatuses[(string)$companyId] = 'approved';
+        } else {
+            // Balance 0 o negativo sin pagos
+            $companyStatuses[(string)$companyId] = 'approved';
+        }
+        
+        $invoice->company_statuses = $companyStatuses;
+        $invoice->status = $companyStatuses[(string)$companyId];
+        $invoice->save();
+    }
+    
     private function generateHomebankingTxt($payments)
     {
         $lines = [];

@@ -148,6 +148,7 @@ class SupplierPaymentController extends Controller
                     'type' => $payment->invoice->type,
                     'sales_point' => $payment->invoice->sales_point,
                     'voucher_number' => $payment->invoice->voucher_number,
+                    'currency' => $payment->invoice->currency ?? 'ARS',
                 ];
                 
                 if ($payment->invoice->supplier) {
@@ -164,6 +165,22 @@ class SupplierPaymentController extends Controller
                         'name' => $payment->invoice->issuerCompany->name,
                     ];
                 }
+                
+                // Incluir NC/ND asociadas
+                $creditNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $debitNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->where('afip_status', 'approved')
+                    ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
+                
+                $invoiceData['credit_notes_applied'] = $creditNotes->toArray();
+                $invoiceData['debit_notes_applied'] = $debitNotes->toArray();
                 
                 return [
                     'id' => $payment->id,

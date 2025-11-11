@@ -1105,6 +1105,8 @@ class InvoiceController extends Controller
             'voucher_number' => 'nullable|max:50',
             'sales_point' => 'nullable|integer|min:1|max:9999',
             'concept' => 'nullable|in:products,services,products_services',
+            'service_date_from' => 'nullable|date',
+            'service_date_to' => 'nullable|date|after_or_equal:service_date_from',
             'issue_date' => 'required|date',
             'due_date' => 'required|date|after_or_equal:issue_date|before:2030-01-01',
             'currency' => 'required|string|size:3',
@@ -1435,6 +1437,8 @@ class InvoiceController extends Controller
                 'sales_point' => $salesPoint,
                 'voucher_number' => $voucherNumber,
                 'concept' => $validated['concept'] ?? 'products',
+                'service_date_from' => !empty($validated['service_date_from']) ? $validated['service_date_from'] : null,
+                'service_date_to' => !empty($validated['service_date_to']) ? $validated['service_date_to'] : null,
                 'issuer_company_id' => $companyId, // Placeholder para constraint
                 'receiver_company_id' => $companyId, // Your company receives
                 'supplier_id' => $supplierId,
@@ -2107,10 +2111,21 @@ class InvoiceController extends Controller
             })
             ->whereIn('type', $compatibleTypes)
             ->where('status', '!=', 'cancelled')
-            ->with(['client', 'receiverCompany', 'collections'])
+            ->with(['client', 'receiverCompany', 'collections', 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
+                // Calcular si está totalmente cobrada
+                $collectedAmount = $inv->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
+                
+                // Excluir si está totalmente cobrada
+                if ($collectedAmount >= $adjustedTotal) {
+                    return false;
+                }
+                
                 // Filter out invoices marked as paid/collected by any company
                 $companyStatuses = $inv->company_statuses ?? [];
                 foreach ($companyStatuses as $status) {
@@ -2162,7 +2177,7 @@ class InvoiceController extends Controller
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
                 ];
-            });
+            })->values();
         
         return response()->json(['invoices' => $invoices]);
     }
@@ -2202,10 +2217,25 @@ class InvoiceController extends Controller
             $query->where('issuer_document', $validated['issuer_document']);
         }
         
-        $invoices = $query->with(['supplier'])
+        $invoices = $query->with(['supplier', 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
+                // Calcular si está totalmente pagada
+                $paidAmount = DB::table('invoice_payments_tracking')
+                    ->where('invoice_id', $inv->id)
+                    ->where('company_id', $companyId)
+                    ->whereIn('status', ['confirmed', 'in_process'])
+                    ->sum('amount');
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
+                
+                // Excluir si está totalmente pagada
+                if ($paidAmount >= $adjustedTotal) {
+                    return false;
+                }
+                
                 // Filter out invoices marked as paid/collected by any company
                 $companyStatuses = $inv->company_statuses ?? [];
                 foreach ($companyStatuses as $status) {
@@ -2254,7 +2284,7 @@ class InvoiceController extends Controller
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
                 ];
-            });
+            })->values();
         
         return response()->json(['invoices' => $invoices]);
     }
@@ -2295,10 +2325,21 @@ class InvoiceController extends Controller
             $query->where('receiver_document', $validated['receiver_document']);
         }
         
-        $invoices = $query->with(['client'])
+        $invoices = $query->with(['client', 'collections', 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
+                // Calcular si está totalmente cobrada
+                $collectedAmount = $inv->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
+                
+                // Excluir si está totalmente cobrada
+                if ($collectedAmount >= $adjustedTotal) {
+                    return false;
+                }
+                
                 // Filter out invoices marked as paid/collected by any company
                 $companyStatuses = $inv->company_statuses ?? [];
                 foreach ($companyStatuses as $status) {
@@ -2347,7 +2388,7 @@ class InvoiceController extends Controller
                     'is_manual_load' => $inv->is_manual_load ?? false,
                     'synced_from_afip' => $inv->synced_from_afip ?? false,
                 ];
-            });
+            })->values();
         
         return response()->json(['invoices' => $invoices]);
     }
@@ -2425,16 +2466,9 @@ class InvoiceController extends Controller
                 'invoice_id' => $relatedInvoice->id,
                 'invoice_number' => $relatedInvoice->number,
             ]);
-        } else if ($relatedInvoice->balance_pending < $relatedInvoice->total) {
-            // Anulación parcial
-            $relatedInvoice->status = 'partially_cancelled';
-            
-            Log::info('Invoice partially cancelled by manual NC/ND', [
-                'invoice_id' => $relatedInvoice->id,
-                'invoice_number' => $relatedInvoice->number,
-                'new_balance' => $relatedInvoice->balance_pending,
-            ]);
         }
+        // NO cambiar el estado a partially_cancelled - mantener el estado original
+        // (pending_approval, approved, etc.) para que siga apareciendo en las vistas
         
         $relatedInvoice->save();
     }

@@ -175,11 +175,12 @@ class InvoiceService
                 break;
 
             case 'partially_cancelled':
-                $query->where('status', 'partially_cancelled')
-                      ->where(function($q) {
-                          $q->whereNull('balance_pending')
-                            ->orWhere('balance_pending', '>', 0);
-                      });
+                // Este estado ya no se usa - las facturas mantienen su estado original
+                // Filtrar por balance_pending < total para identificar facturas parcialmente anuladas
+                $query->where(function($q) {
+                    $q->whereColumn('balance_pending', '<', 'total')
+                      ->where('balance_pending', '>', 0);
+                });
                 break;
 
             default:
@@ -337,8 +338,10 @@ class InvoiceService
             // Set payment status based on invoice direction (operation type)
             if ($invoice->direction === 'issued') {
                 $invoice->payment_status = 'collected'; // Cobrada
+                $invoice->display_status = 'collected'; // Update display_status
             } else {
                 $invoice->payment_status = 'paid'; // Pagada
+                $invoice->display_status = 'paid'; // Update display_status
             }
         } elseif ($paidAmount > 0) {
             $invoice->payment_status = 'partial';
@@ -420,9 +423,7 @@ class InvoiceService
                 'invoice_number' => $relatedInvoice->number,
             ]);
         } else if ($relatedInvoice->balance_pending < $relatedInvoice->total) {
-            // Partial cancellation
-            $relatedInvoice->status = 'partially_cancelled';
-            
+            // Partial cancellation - NO cambiar el estado, mantener el original
             Log::info('Invoice partially cancelled by manual NC/ND', [
                 'invoice_id' => $relatedInvoice->id,
                 'invoice_number' => $relatedInvoice->number,

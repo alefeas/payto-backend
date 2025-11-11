@@ -109,7 +109,68 @@ class PaymentService
             'confirmed_at' => now(),
         ]);
         
+        // Actualizar estado de la factura y NC/ND asociadas
+        $invoice = $payment->invoice;
+        if ($invoice) {
+            $this->updateInvoicePaymentStatus($invoice, $payment->company_id);
+        }
+        
         return $payment;
+    }
+    
+    private function updateInvoicePaymentStatus(Invoice $invoice, string $companyId): void
+    {
+        $totalPaid = Payment::where('invoice_id', $invoice->id)
+            ->where('status', 'confirmed')
+            ->sum('amount');
+        
+        $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+            ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+            ->where('status', '!=', 'cancelled')
+            ->where('afip_status', 'approved')
+            ->get();
+        
+        $totalNC = $creditNotes->sum('total');
+        $totalND = $debitNotes->sum('total');
+        $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
+        
+        $companyStatuses = $invoice->company_statuses ?: [];
+        
+        if ($totalPaid >= $balancePending && $balancePending > 0) {
+            $companyStatuses[(string)$companyId] = 'paid';
+            
+            foreach ($creditNotes as $nc) {
+                $ncStatuses = $nc->company_statuses ?: [];
+                $ncStatuses[(string)$companyId] = 'paid';
+                $nc->company_statuses = $ncStatuses;
+                $nc->status = 'paid';
+                $nc->save();
+            }
+            
+            foreach ($debitNotes as $nd) {
+                $ndStatuses = $nd->company_statuses ?: [];
+                $ndStatuses[(string)$companyId] = 'paid';
+                $nd->company_statuses = $ndStatuses;
+                $nd->status = 'paid';
+                $nd->save();
+            }
+        } elseif ($totalPaid > 0 && $balancePending < 0) {
+            $companyStatuses[(string)$companyId] = 'overpaid';
+        } elseif ($balancePending > 0) {
+            $companyStatuses[(string)$companyId] = 'approved';
+        } else {
+            $companyStatuses[(string)$companyId] = 'approved';
+        }
+        
+        $invoice->company_statuses = $companyStatuses;
+        $invoice->status = $companyStatuses[(string)$companyId];
+        $invoice->save();
     }
 
     public function calculateRetentions(Invoice $invoice, Company $company): array
@@ -199,6 +260,35 @@ class PaymentService
         if ($totalPaid >= $balancePending && $balancePending > 0) {
             // Pagado completamente
             $companyStatuses[(string)$company->id] = 'paid';
+            
+            // Actualizar NC/ND asociadas
+            $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                ->where('status', '!=', 'cancelled')
+                ->where('afip_status', 'approved')
+                ->get();
+            
+            foreach ($creditNotes as $nc) {
+                $ncStatuses = $nc->company_statuses ?: [];
+                $ncStatuses[(string)$company->id] = 'paid';
+                $nc->company_statuses = $ncStatuses;
+                $nc->status = 'paid';
+                $nc->save();
+            }
+            
+            $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                ->where('status', '!=', 'cancelled')
+                ->where('afip_status', 'approved')
+                ->get();
+            
+            foreach ($debitNotes as $nd) {
+                $ndStatuses = $nd->company_statuses ?: [];
+                $ndStatuses[(string)$company->id] = 'paid';
+                $nd->company_statuses = $ndStatuses;
+                $nd->status = 'paid';
+                $nd->save();
+            }
         } elseif ($totalPaid > 0 && $balancePending < 0) {
             // Pagó de más (tiene saldo a favor)
             $companyStatuses[(string)$company->id] = 'overpaid';
@@ -211,6 +301,7 @@ class PaymentService
         }
         
         $invoice->company_statuses = $companyStatuses;
+        $invoice->status = $companyStatuses[(string)$company->id];
         $invoice->save();
     }
 

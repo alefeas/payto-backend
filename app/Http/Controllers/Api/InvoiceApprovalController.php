@@ -63,6 +63,33 @@ class InvoiceApprovalController extends Controller
             $invoice->company_statuses = $companyStatuses;
             $invoice->approval_date = now();
             $invoice->save();
+            
+            // Actualizar NC/ND asociadas a approved
+            $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                ->where('status', '!=', 'cancelled')
+                ->get();
+            
+            foreach ($creditNotes as $nc) {
+                $ncStatuses = $nc->company_statuses ?: [];
+                $ncStatuses[(int)$companyId] = 'approved';
+                $nc->company_statuses = $ncStatuses;
+                $nc->status = 'approved';
+                $nc->save();
+            }
+            
+            $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                ->where('status', '!=', 'cancelled')
+                ->get();
+            
+            foreach ($debitNotes as $nd) {
+                $ndStatuses = $nd->company_statuses ?: [];
+                $ndStatuses[(int)$companyId] = 'approved';
+                $nd->company_statuses = $ndStatuses;
+                $nd->status = 'approved';
+                $nd->save();
+            }
         }
 
         $invoice->refresh();
