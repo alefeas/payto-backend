@@ -34,7 +34,7 @@ class InvoiceService
             'issuerCompany',
             'receiverCompany',
             'approvals.user',
-            'relatedInvoice',
+            'relatedInvoice' => function($query) { $query->select('id', 'status', 'afip_status'); },
             'payments',
             'collections'
         ];
@@ -247,6 +247,12 @@ class InvoiceService
         
         // Calculate payment_status and pending_amount
         $this->calculatePaymentStatus($invoice, $companyId);
+        
+        // Si es NC/ND con factura relacionada, sobrescribir display_status con el de la factura relacionada
+        $isNCND = in_array($invoice->type, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']);
+        if ($isNCND && $invoice->relatedInvoice) {
+            $invoice->display_status = $invoice->relatedInvoice->status;
+        }
         
         // Calculate available_balance (for related invoices - saldo disponible)
         $invoice->available_balance = $invoice->balance_pending ?? $invoice->total ?? 0;

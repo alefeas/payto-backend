@@ -562,6 +562,43 @@ class VoucherController extends Controller
             'issuer_company_id_inherited' => $issuerCompanyId ?? null,
         ]);
         
+        // Heredar estado de la factura relacionada y validar saldo
+        $initialStatus = 'pending_approval';
+        $initialAfipStatus = 'pending';
+        if (isset($data['related_invoice_id'])) {
+            $relatedInvoice = Invoice::find($data['related_invoice_id']);
+            if ($relatedInvoice) {
+                $initialStatus = $relatedInvoice->status;
+                $initialAfipStatus = $relatedInvoice->afip_status;
+                
+                // Validar que NC no deje saldo negativo
+                $isNC = in_array($type, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+                if ($isNC) {
+                    $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                        ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                        ->where('status', '!=', 'cancelled')
+                        ->where('afip_status', 'approved')
+                        ->sum('total');
+                    $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                        ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                        ->where('status', '!=', 'cancelled')
+                        ->where('afip_status', 'approved')
+                        ->sum('total');
+                    $availableBalance = ($relatedInvoice->total ?? 0) + $totalND - $totalNC;
+                    
+                    if ($total > $availableBalance) {
+                        throw new \Exception("El monto de la NC no puede superar el saldo disponible. Saldo disponible: " . number_format($availableBalance, 2) . " " . ($relatedInvoice->currency ?? 'ARS') . ". Monto ingresado: " . number_format($total, 2) . " " . $currency);
+                    }
+                }
+            }
+        }
+        
+        // Heredar due_date de factura relacionada si existe
+        $dueDate = $data['due_date'] ?? now()->addDays(30);
+        if (isset($data['related_invoice_id']) && $relatedInvoice) {
+            $dueDate = $relatedInvoice->due_date;
+        }
+        
         $voucher = Invoice::create([
             'number' => sprintf('%04d-%08d', $data['sales_point'], $voucherNumber),
             'type' => $type,
@@ -582,7 +619,7 @@ class VoucherController extends Controller
             'issuer_tax_condition' => $issuerTaxCondition ?? null,
             'related_invoice_id' => $data['related_invoice_id'] ?? null,
             'issue_date' => $data['issue_date'],
-            'due_date' => $data['due_date'] ?? now()->addDays(30),
+            'due_date' => $dueDate,
             'service_date_from' => !empty($data['service_date_from']) ? $data['service_date_from'] : null,
             'service_date_to' => !empty($data['service_date_to']) ? $data['service_date_to'] : null,
             'subtotal' => $subtotal,
@@ -592,8 +629,8 @@ class VoucherController extends Controller
             'currency' => $currency,
             'exchange_rate' => $exchangeRate,
             'notes' => $data['notes'] ?? null,
-            'status' => 'pending_approval',
-            'afip_status' => 'pending',
+            'status' => $initialStatus,
+            'afip_status' => $initialAfipStatus,
             'approvals_required' => 0,
             'approvals_received' => 0,
             'created_by' => auth()->id(),

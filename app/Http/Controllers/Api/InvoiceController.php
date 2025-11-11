@@ -748,15 +748,17 @@ class InvoiceController extends Controller
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
             
-            // Si es NC/ND con factura relacionada, heredar receptor
+            // Si es NC/ND con factura relacionada, heredar receptor y due_date
             $clientId = null;
             $receiverCompanyId = null;
             $clientName = null;
             $clientDocument = null;
+            $inheritedDueDate = null;
             
             if (!empty($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::with(['client', 'receiverCompany'])->find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
+                    $inheritedDueDate = $relatedInvoice->due_date;
                     // PRIORIDAD 1: Si tiene client_id, usarlo
                     if ($relatedInvoice->client_id) {
                         $clientId = $relatedInvoice->client_id;
@@ -931,7 +933,7 @@ class InvoiceController extends Controller
                 'receiver_document' => $clientDocument,
                 'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
-                'due_date' => $validated['due_date'],
+                'due_date' => $inheritedDueDate ?? $validated['due_date'],
                 'subtotal' => $subtotal,
                 'total_taxes' => $totalTaxes,
                 'total_perceptions' => 0,
@@ -1019,7 +1021,7 @@ class InvoiceController extends Controller
                 ]);
             }
 
-            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
+            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada y que no deje saldo negativo
             if (isset($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
@@ -1030,6 +1032,19 @@ class InvoiceController extends Controller
                             return response()->json([
                                 'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
                                 'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                            ], 422);
+                        }
+                    }
+                    
+                    // Validar que NC no deje saldo negativo
+                    $isNC = in_array($invoiceTypeInternal, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+                    if ($isNC) {
+                        $availableBalance = $this->calculateAvailableBalance($relatedInvoice, $companyId);
+                        if ($total > $availableBalance) {
+                            DB::rollBack();
+                            return response()->json([
+                                'message' => 'El monto de la NC no puede superar el saldo disponible',
+                                'error' => "Saldo disponible: " . number_format($availableBalance, 2) . " " . ($relatedInvoice->currency ?? 'ARS') . ". Monto ingresado: " . number_format($total, 2) . " " . $validated['currency']
                             ], 422);
                         }
                     }
@@ -1239,10 +1254,12 @@ class InvoiceController extends Controller
             $supplierId = null;
             $issuerCompanyId = null;
             
-            // Si es NC/ND con factura relacionada, heredar emisor
+            // Si es NC/ND con factura relacionada, heredar emisor y due_date
+            $inheritedDueDate = null;
             if (!empty($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::with(['supplier', 'issuerCompany'])->find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
+                    $inheritedDueDate = $relatedInvoice->due_date;
                     // PRIORIDAD 1: Si tiene supplier_id, usarlo
                     if ($relatedInvoice->supplier_id) {
                         $supplierId = $relatedInvoice->supplier_id;
@@ -1389,11 +1406,30 @@ class InvoiceController extends Controller
                 $supplierDocument = $validated['supplier_document'] ?? null;
             }
             
-            // Determine initial status based on approval configuration
-            $requiredApprovals = (int)($company->required_approvals ?? 0);
-            
             // Convert invoice type code to internal type
             $invoiceTypeInternal = \App\Services\VoucherTypeService::getTypeByCode($validated['invoice_type']) ?? $validated['invoice_type'];
+            
+            // Determine initial status
+            $requiredApprovals = (int)($company->required_approvals ?? 0);
+            $initialStatus = $requiredApprovals === 0 ? 'approved' : 'pending_approval';
+            $initialAfipStatus = 'approved';
+            
+            // Si es NC/ND con factura relacionada, heredar estado de la factura
+            if (!empty($validated['related_invoice_id'])) {
+                $relatedInvoiceForStatus = Invoice::find($validated['related_invoice_id']);
+                if ($relatedInvoiceForStatus) {
+                    $initialStatus = $relatedInvoiceForStatus->status;
+                    $initialAfipStatus = $relatedInvoiceForStatus->afip_status;
+                    
+                    Log::info('Inheriting status from related invoice', [
+                        'related_invoice_id' => $relatedInvoiceForStatus->id,
+                        'related_invoice_status' => $relatedInvoiceForStatus->status,
+                        'related_invoice_afip_status' => $relatedInvoiceForStatus->afip_status,
+                        'inherited_status' => $initialStatus,
+                        'inherited_afip_status' => $initialAfipStatus,
+                    ]);
+                }
+            }
             
             // Check for duplicate: same receiver + issuer + type + sales_point + number
             $existingInvoice = Invoice::withTrashed()
@@ -1446,7 +1482,7 @@ class InvoiceController extends Controller
                 'issuer_document' => $supplierDocument,
                 'related_invoice_id' => $validated['related_invoice_id'] ?? null,
                 'issue_date' => $validated['issue_date'],
-                'due_date' => $validated['due_date'],
+                'due_date' => $inheritedDueDate ?? $validated['due_date'],
                 'subtotal' => $subtotal,
                 'total_taxes' => $totalTaxes,
                 'total_perceptions' => $totalPerceptions,
@@ -1454,11 +1490,11 @@ class InvoiceController extends Controller
                 'currency' => $validated['currency'],
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
                 'notes' => $validated['notes'] ?? null,
-                'status' => $requiredApprovals === 0 ? 'approved' : 'pending_approval',
-                'afip_status' => 'approved',
+                'status' => $initialStatus,
+                'afip_status' => $initialAfipStatus,
                 'approvals_required' => $requiredApprovals,
                 'approvals_received' => 0,
-                'approval_date' => $requiredApprovals === 0 ? now() : null,
+                'approval_date' => $initialStatus === 'approved' ? now() : null,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,
                 'manual_supplier' => true,
