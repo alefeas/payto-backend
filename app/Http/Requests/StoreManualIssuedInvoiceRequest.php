@@ -48,6 +48,12 @@ class StoreManualIssuedInvoiceRequest extends FormRequest
             'service_date_from' => 'nullable|date|required_if:concept,services,products_services',
             'service_date_to' => 'nullable|date|after_or_equal:service_date_from|required_if:concept,services,products_services',
             'attachment' => 'nullable|file|mimes:pdf|max:10240',
+            'perceptions' => 'nullable|array',
+            'perceptions.*.type' => 'required|string|max:100',
+            'perceptions.*.name' => 'required|string|max:100',
+            'perceptions.*.rate' => 'required|numeric|min:0|max:100',
+            'perceptions.*.base_type' => 'nullable|in:net,total,vat',
+            'perceptions.*.jurisdiction' => 'nullable|string|max:100',
         ];
     }
 

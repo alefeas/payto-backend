@@ -170,6 +170,26 @@ class InvoiceController extends Controller
                     'error' => 'El total de la factura debe ser mayor a $0. Si aplicaste 100% de descuento, considera emitir una Nota de Crédito en lugar de una factura.',
                 ], 422);
             }
+            
+            // Validar percepciones en CF
+            if (!empty($perceptionsToApply)) {
+                $receiverTaxCondition = null;
+                if ($receiverCompanyId) {
+                    $receiverCompany = Company::find($receiverCompanyId);
+                    $receiverTaxCondition = $receiverCompany?->tax_condition;
+                } elseif ($clientId) {
+                    $client = \App\Models\Client::find($clientId);
+                    $receiverTaxCondition = $client?->tax_condition;
+                }
+                
+                if ($receiverTaxCondition === 'final_consumer') {
+                    DB::rollBack();
+                    return response()->json([
+                        'message' => 'No se pueden aplicar percepciones a Consumidores Finales',
+                        'errors' => ['perceptions' => ['Las percepciones no aplican para Consumidores Finales según normativa AFIP']]
+                    ], 422);
+                }
+            }
 
             // Determinar receptor
             $receiverCompanyId = $validated['receiver_company_id'] ?? null;
@@ -182,6 +202,15 @@ class InvoiceController extends Controller
             if ($receiverCompanyId) {
                 // Si seleccionó empresa conectada, crear cliente automáticamente
                 $receiverCompany = Company::findOrFail($receiverCompanyId);
+                
+                // Validar que la empresa tenga condición IVA configurada
+                if (!$receiverCompany->tax_condition || $receiverCompany->tax_condition === 'null') {
+                    return response()->json([
+                        'message' => 'La empresa receptora no tiene condición IVA configurada',
+                        'errors' => ['receiver_company_id' => ['La empresa debe completar su perfil fiscal en PayTo antes de poder emitirle facturas']]
+                    ], 422);
+                }
+                
                 $receiverName = $receiverCompany->name;
                 $receiverDocument = $receiverCompany->national_id;
                 
@@ -786,6 +815,15 @@ class InvoiceController extends Controller
                 // Si seleccionó empresa conectada, crear cliente automáticamente
                 if ($receiverCompanyId) {
                     $receiverCompany = Company::findOrFail($receiverCompanyId);
+                    
+                    // Validar que la empresa tenga condición IVA configurada
+                    if (!$receiverCompany->tax_condition || $receiverCompany->tax_condition === 'null') {
+                        return response()->json([
+                            'message' => 'La empresa receptora no tiene condición IVA configurada',
+                            'errors' => ['receiver_company_id' => ['La empresa debe completar su perfil fiscal en PayTo antes de poder emitirle facturas']]
+                        ], 422);
+                    }
+                    
                     $clientName = $receiverCompany->name;
                     $clientDocument = $receiverCompany->national_id;
                     
@@ -851,6 +889,26 @@ class InvoiceController extends Controller
                     'message' => 'Ya existe una factura con el mismo tipo, punto de venta y número. Verifique los datos ingresados.',
                     'errors' => ['voucher_number' => ['Factura duplicada']]
                 ], 422);
+            }
+            
+            // Validar percepciones en CF (solo para emitidas)
+            if (!empty($validated['perceptions'])) {
+                $receiverTaxCondition = null;
+                if ($receiverCompanyId) {
+                    $receiverCompany = Company::find($receiverCompanyId);
+                    $receiverTaxCondition = $receiverCompany?->tax_condition;
+                } elseif ($clientId) {
+                    $client = \App\Models\Client::find($clientId);
+                    $receiverTaxCondition = $client?->tax_condition;
+                }
+                
+                if ($receiverTaxCondition === 'final_consumer') {
+                    DB::rollBack();
+                    return response()->json([
+                        'message' => 'No se pueden aplicar percepciones a Consumidores Finales',
+                        'errors' => ['perceptions' => ['Las percepciones no aplican para Consumidores Finales según normativa AFIP']]
+                    ], 422);
+                }
             }
             
             // Create manual issued invoice (NO enviar a empresa conectada)
@@ -920,7 +978,37 @@ class InvoiceController extends Controller
                 ]);
             }
 
-            // Si es NC/ND con factura relacionada, validar
+            // Create perceptions
+            $totalPerceptionsAmount = 0;
+            if (!empty($validated['perceptions'])) {
+                foreach ($validated['perceptions'] as $perception) {
+                    $baseAmount = $this->calculatePerceptionBase(
+                        $perception['type'],
+                        $perception['base_type'] ?? null,
+                        $subtotal,
+                        $totalTaxes
+                    );
+                    $amount = $baseAmount * (($perception['rate'] ?? 0) / 100);
+                    $totalPerceptionsAmount += $amount;
+
+                    $invoice->perceptions()->create([
+                        'type' => $perception['type'],
+                        'name' => $perception['name'],
+                        'rate' => $perception['rate'] ?? 0,
+                        'base_type' => $perception['base_type'] ?? $this->getDefaultBaseType($perception['type']),
+                        'jurisdiction' => $perception['jurisdiction'] ?? null,
+                        'base_amount' => $baseAmount,
+                        'amount' => $amount,
+                    ]);
+                }
+                
+                // Update invoice totals
+                $invoice->update([
+                    'total_perceptions' => $totalPerceptionsAmount,
+                    'total' => $subtotal + $totalTaxes + $totalPerceptionsAmount
+                ]);
+            }
+
             // Handle attachment if provided
             if ($request->hasFile('attachment')) {
                 $file = $request->file('attachment');
@@ -1228,6 +1316,15 @@ class InvoiceController extends Controller
             } elseif (!empty($validated['issuer_company_id'])) {
                 // Si seleccionó empresa conectada, crear proveedor automáticamente
                 $issuerCompany = Company::with(['primaryBankAccount', 'bankAccounts', 'address'])->findOrFail($validated['issuer_company_id']);
+                
+                // Validar que la empresa tenga condición IVA configurada
+                if (!$issuerCompany->tax_condition || $issuerCompany->tax_condition === 'null') {
+                    return response()->json([
+                        'message' => 'La empresa emisora no tiene condición IVA configurada',
+                        'errors' => ['issuer_company_id' => ['La empresa debe completar su perfil fiscal en PayTo antes de poder cargar sus facturas']]
+                    ], 422);
+                }
+                
                 $supplierName = $issuerCompany->name;
                 $supplierDocument = $issuerCompany->national_id;
                 

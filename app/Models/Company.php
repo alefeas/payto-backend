@@ -22,6 +22,7 @@ class Company extends Model
         'unique_id',
         'default_role',
         'tax_condition',
+        'tax_regime',
         'is_mipyme',
         'cbu',
         'default_sales_point',
@@ -60,8 +61,8 @@ class Company extends Model
 
     public function setTaxConditionAttribute($value)
     {
-        $this->attributes['tax_regime'] = empty($value) ? null : $value;
-        $this->attributes['tax_condition'] = empty($value) ? null : $value;
+        $this->attributes['tax_regime'] = $value;
+        $this->attributes['tax_condition'] = $value;
     }
 
     public function members()
