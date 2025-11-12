@@ -343,8 +343,10 @@ class AccountsPayableController extends Controller
                 $invoice->has_bank_data = $hasBankData;
             });
             
-            // Filtrar solo facturas con saldo pendiente (excluir pagadas completamente)
+            // Filtrar solo facturas con saldo pendiente (excluir pagadas/canceladas completamente)
             $invoices = $invoices->filter(function($inv) {
+                if ($inv->status === 'cancelled') return false;
+                if ($inv->payment_status === 'paid' || $inv->payment_status === 'collected') return false;
                 return $inv->pending_amount > 0;
             })->values();
             

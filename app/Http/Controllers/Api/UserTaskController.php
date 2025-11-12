@@ -26,7 +26,14 @@ class UserTaskController extends Controller
             'title' => 'required|string|max:200',
             'description' => 'nullable|string',
             'priority' => 'required|in:low,medium,high',
-            'due_date' => 'nullable|date',
+            'due_date' => 'required|date',
+        ], [
+            'title.required' => 'El título es requerido',
+            'title.max' => 'El título no puede exceder 200 caracteres',
+            'priority.required' => 'La prioridad es requerida',
+            'priority.in' => 'La prioridad debe ser baja, media o alta',
+            'due_date.required' => 'La fecha de entrega es requerida',
+            'due_date.date' => 'La fecha de entrega debe ser una fecha válida',
         ]);
 
         $task = UserTask::create([

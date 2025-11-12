@@ -47,11 +47,11 @@ class IvaBookController extends Controller
         $year = $request->input('year');
 
         // Obtener facturas emitidas del período (incluye NC/ND asociadas)
-        // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
+        // Incluir TODAS excepto archived (rechazadas sin CAE)
         $invoices = Invoice::where('issuer_company_id', $companyId)
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
-            ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
+            ->where('status', '!=', 'archived') // Excluir solo rechazadas sin CAE
             ->with([
                 'client' => function($query) {
                     $query->withTrashed(); // Incluir clientes eliminados
@@ -120,8 +120,8 @@ class IvaBookController extends Controller
                 'iva_5' => 0,
                 'exento' => 0,
                 'no_gravado' => 0,
-                'percepciones' => ($invoice->total_perceptions ?? 0) * $multiplier,
-                'total' => $invoice->total * $multiplier,
+                'percepciones' => (($invoice->total_perceptions ?? 0) * ($invoice->exchange_rate ?? 1)) * $multiplier,
+                'total' => ($invoice->total * ($invoice->exchange_rate ?? 1)) * $multiplier,
             ];
 
             // Agregar CAE si existe
@@ -130,10 +130,10 @@ class IvaBookController extends Controller
                 $record['cae_expiration'] = $invoice->cae_expiration;
             }
 
-            // Agrupar por alícuota
+            // Agrupar por alícuota (convertir a ARS)
             foreach ($invoice->items as $item) {
-                $itemSubtotal = $item->subtotal * $multiplier;
-                $itemTax = $item->tax_amount * $multiplier;
+                $itemSubtotal = ($item->subtotal * ($invoice->exchange_rate ?? 1)) * $multiplier;
+                $itemTax = ($item->tax_amount * ($invoice->exchange_rate ?? 1)) * $multiplier;
 
                 if ($item->tax_rate == 21) {
                     $record['neto_gravado'] += $itemSubtotal;
@@ -212,12 +212,24 @@ class IvaBookController extends Controller
         $year = $request->input('year');
 
         // Obtener facturas recibidas del período
-        // Incluir TODAS excepto cancelled (anuladas con NC) y archived (rechazadas)
-        $invoices = Invoice::where('receiver_company_id', $companyId)
-            ->where('issuer_company_id', '!=', $companyId) // Excluir facturas propias
+        // Incluir TODAS excepto archived (rechazadas sin CAE)
+        // IMPORTANTE: Incluir facturas con supplier_id (proveedores externos) O receiver_company_id (empresas conectadas)
+        $invoices = Invoice::where(function($query) use ($companyId) {
+                // Facturas recibidas de empresas conectadas
+                $query->where('receiver_company_id', $companyId)
+                      ->where('issuer_company_id', '!=', $companyId);
+            })
+            ->orWhere(function($query) use ($companyId) {
+                // Facturas de proveedores externos (supplier_id)
+                $query->whereNotNull('supplier_id')
+                      ->whereHas('supplier', function($q) use ($companyId) {
+                          // Verificar que el proveedor pertenece a esta empresa
+                          $q->where('company_id', $companyId);
+                      });
+            })
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
-            ->whereNotIn('status', ['cancelled', 'archived']) // Excluir solo anuladas y archivadas
+            ->where('status', '!=', 'archived') // Excluir solo rechazadas sin CAE
             ->with([
                 'supplier' => function($query) {
                     $query->withTrashed(); // Incluir proveedores eliminados
@@ -292,15 +304,15 @@ class IvaBookController extends Controller
                 'iva_5' => 0,
                 'exento' => 0,
                 'no_gravado' => 0,
-                'percepciones' => ($invoice->total_perceptions ?? 0) * $multiplier,
+                'percepciones' => (($invoice->total_perceptions ?? 0) * ($invoice->exchange_rate ?? 1)) * $multiplier,
                 'retenciones' => $retentions * $multiplier,
-                'total' => $invoice->total * $multiplier,
+                'total' => ($invoice->total * ($invoice->exchange_rate ?? 1)) * $multiplier,
             ];
 
-            // Agrupar por alícuota
+            // Agrupar por alícuota (convertir a ARS)
             foreach ($invoice->items as $item) {
-                $itemSubtotal = $item->subtotal * $multiplier;
-                $itemTax = $item->tax_amount * $multiplier;
+                $itemSubtotal = ($item->subtotal * ($invoice->exchange_rate ?? 1)) * $multiplier;
+                $itemTax = ($item->tax_amount * ($invoice->exchange_rate ?? 1)) * $multiplier;
 
                 if ($item->tax_rate == 21) {
                     $record['neto_gravado'] += $itemSubtotal;
@@ -408,13 +420,14 @@ class IvaBookController extends Controller
         $salesRequest = new Request(['month' => $request->month, 'year' => $request->year]);
         $salesBook = $this->getSalesBook($salesRequest, $companyId)->getData();
         
-        // Validar CUITs antes de exportar
+        // Validar solo CUITs (no DNIs de CF)
         $invalidCuits = [];
         foreach ($salesBook->data->records as $record) {
             $record = (array)$record;
-            // Ignorar CUIT por defecto (sin cliente)
-            if ($record['cuit'] !== '00000000000' && !CuitValidatorService::isValid($record['cuit'])) {
-                $invalidCuits[] = $record['cuit'] . ' (' . $record['cliente'] . ')';
+            $cuit = $record['cuit'];
+            // Solo validar si es CUIT (11 dígitos) y no es el por defecto
+            if ($cuit !== '00000000000' && strlen($cuit) == 11 && !CuitValidatorService::isValid($cuit)) {
+                $invalidCuits[] = $cuit . ' (' . $record['cliente'] . ')';
             }
         }
         
@@ -422,19 +435,10 @@ class IvaBookController extends Controller
             $invalidList = implode(', ', array_slice($invalidCuits, 0, 5)) . 
                           (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
             
-            if (!$request->has('force')) {
-                return $this->error(
-                    'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. AFIP rechazará este archivo.',
-                    422
-                );
-            }
-            
-            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList;
-            
-            \Log::warning('Libro IVA Ventas exportado con CUITs inválidos', [
-                'company_id' => $companyId,
-                'invalid_cuits' => $invalidCuits,
-            ]);
+            return $this->error(
+                'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. Corrige los CUITs inválidos editando los clientes/empresas en sus secciones respectivas.',
+                422
+            );
         }
 
         $content = $this->generateAfipSalesTxt($salesBook->data, $company);
@@ -460,13 +464,14 @@ class IvaBookController extends Controller
         $purchasesRequest = new Request(['month' => $request->month, 'year' => $request->year]);
         $purchasesBook = $this->getPurchasesBook($purchasesRequest, $companyId)->getData();
         
-        // Validar CUITs antes de exportar
+        // Validar solo CUITs (no DNIs de CF)
         $invalidCuits = [];
         foreach ($purchasesBook->data->records as $record) {
             $record = (array)$record;
-            // Ignorar CUIT por defecto (sin proveedor)
-            if ($record['cuit'] !== '00000000000' && !CuitValidatorService::isValid($record['cuit'])) {
-                $invalidCuits[] = $record['cuit'] . ' (' . $record['proveedor'] . ')';
+            $cuit = $record['cuit'];
+            // Solo validar si es CUIT (11 dígitos) y no es el por defecto
+            if ($cuit !== '00000000000' && strlen($cuit) == 11 && !CuitValidatorService::isValid($cuit)) {
+                $invalidCuits[] = $cuit . ' (' . $record['proveedor'] . ')';
             }
         }
         
@@ -474,19 +479,10 @@ class IvaBookController extends Controller
             $invalidList = implode(', ', array_slice($invalidCuits, 0, 5)) . 
                           (count($invalidCuits) > 5 ? ' y ' . (count($invalidCuits) - 5) . ' más' : '');
             
-            if (!$request->has('force')) {
-                return $this->error(
-                    'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. AFIP rechazará este archivo.',
-                    422
-                );
-            }
-            
-            $message = 'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList;
-            
-            \Log::warning('Libro IVA Compras exportado con CUITs inválidos', [
-                'company_id' => $companyId,
-                'invalid_cuits' => $invalidCuits,
-            ]);
+            return $this->error(
+                'Se encontraron ' . count($invalidCuits) . ' CUIT(s) inválido(s): ' . $invalidList . '. Corrige los CUITs inválidos editando los proveedores/empresas en sus secciones respectivas.',
+                422
+            );
         }
 
         $content = $this->generateAfipPurchasesTxt($purchasesBook->data, $company);

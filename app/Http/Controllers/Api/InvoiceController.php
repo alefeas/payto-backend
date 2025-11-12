@@ -337,7 +337,7 @@ class InvoiceController extends Controller
                             DB::rollBack();
                             return response()->json([
                                 'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
-                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada. Para este caso, emití la NC/ND sin asociar a ninguna factura para que aparezca en los saldos de NC/ND y puedas gestionarla correctamente.'
                             ], 422);
                         }
                     }
@@ -1031,7 +1031,7 @@ class InvoiceController extends Controller
                             DB::rollBack();
                             return response()->json([
                                 'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
-                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada. Para este caso, cargá la NC/ND sin asociar a ninguna factura para que aparezca en los saldos de NC/ND y puedas gestionarla correctamente.'
                             ], 422);
                         }
                     }
@@ -1565,7 +1565,7 @@ class InvoiceController extends Controller
                 ]);
             }
 
-            // Si es NC/ND con factura relacionada, validar que no estǸ pagada/cobrada
+            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada
             if (isset($validated['related_invoice_id'])) {
                 $relatedInvoice = Invoice::find($validated['related_invoice_id']);
                 if ($relatedInvoice) {
@@ -1575,7 +1575,7 @@ class InvoiceController extends Controller
                             DB::rollBack();
                             return response()->json([
                                 'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
-                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada por alguna empresa.'
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada. Para este caso, cargá la NC/ND sin asociar a ninguna factura para que aparezca en los saldos de NC/ND y puedas gestionarla correctamente.'
                             ], 422);
                         }
                     }
