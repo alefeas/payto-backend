@@ -93,6 +93,9 @@ class CompanyService implements CompanyServiceInterface
             throw new BadRequestException('Ya eres miembro de esta empresa');
         }
 
+        $user = \App\Models\User::find($userId);
+        $userName = trim("{$user->first_name} {$user->last_name}") ?: $user->email;
+
         CompanyMember::create([
             'company_id' => $company->id,
             'user_id' => $userId,
@@ -107,6 +110,15 @@ class CompanyService implements CompanyServiceInterface
             "Nuevo miembro se unió a la empresa",
             'CompanyMember',
             null
+        );
+
+        app(NotificationService::class)->createForCompanyMembers(
+            $company->id,
+            'member_joined',
+            'Nuevo miembro',
+            "{$userName} se unió a la empresa",
+            ['user_id' => $userId, 'user_name' => $userName],
+            $userId
         );
 
         return $this->formatCompanyData($company);

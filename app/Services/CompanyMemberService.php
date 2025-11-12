@@ -104,6 +104,16 @@ class CompanyMemberService implements CompanyMemberServiceInterface
             ['old_role' => $oldRole, 'new_role' => $newRole]
         );
 
+        $userName = trim("{$member->user->first_name} {$member->user->last_name}") ?: $member->user->email;
+        app(NotificationService::class)->createForCompanyMembers(
+            $companyId,
+            'member_role_updated',
+            'Rol actualizado',
+            "El rol de {$userName} fue cambiado a {$newRole}",
+            ['user_id' => $member->user_id, 'user_name' => $userName, 'old_role' => $oldRole, 'new_role' => $newRole],
+            $userId
+        );
+
         return $this->formatMemberData($member->load('user'));
     }
 
@@ -139,17 +149,26 @@ class CompanyMemberService implements CompanyMemberServiceInterface
             $this->validateMinimumAdministrators($companyId);
         }
 
-        $memberName = $member->user->name;
+        $userName = trim("{$member->user->first_name} {$member->user->last_name}") ?: $member->user->email;
         $member->delete();
 
         $this->auditService->log(
             $companyId,
             $userId,
             'member.removed',
-            "Miembro {$memberName} removido de la empresa",
+            "Miembro {$userName} removido de la empresa",
             'CompanyMember',
             $memberId,
             ['member_role' => $member->role]
+        );
+
+        app(NotificationService::class)->createForCompanyMembers(
+            $companyId,
+            'member_removed',
+            'Miembro removido',
+            "{$userName} fue removido de la empresa",
+            ['user_id' => $member->user_id, 'user_name' => $userName, 'role' => $member->role],
+            $userId
         );
 
         return true;
