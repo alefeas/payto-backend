@@ -171,6 +171,10 @@ class InvoiceController extends Controller
                 ], 422);
             }
             
+            // Determinar receptor
+            $receiverCompanyId = $validated['receiver_company_id'] ?? null;
+            $clientId = $validated['client_id'] ?? null;
+
             // Validar percepciones en CF
             if (!empty($perceptionsToApply)) {
                 $receiverTaxCondition = null;
@@ -190,10 +194,6 @@ class InvoiceController extends Controller
                     ], 422);
                 }
             }
-
-            // Determinar receptor
-            $receiverCompanyId = $validated['receiver_company_id'] ?? null;
-            $clientId = $validated['client_id'] ?? null;
             
             // Obtener datos del receptor para guardar en la factura
             $receiverName = null;
