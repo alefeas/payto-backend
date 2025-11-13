@@ -86,8 +86,8 @@ class AfipVerificationService
             }
         }
         
-        // Default
-        return 'final_consumer';
+        // Default para empresas (no pueden ser consumidor final)
+        return 'registered_taxpayer';
     }
 
     public function getContribuyenteData(string $cuit, Company $company): ?array

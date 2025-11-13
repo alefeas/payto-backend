@@ -48,7 +48,13 @@ class IvaBookController extends Controller
 
         // Obtener facturas emitidas del período (incluye NC/ND asociadas)
         // Incluir TODAS excepto archived (rechazadas sin CAE)
+        // IMPORTANTE: Solo facturas donde la empresa es EMISORA, no receptora
         $invoices = Invoice::where('issuer_company_id', $companyId)
+            ->where(function($query) use ($companyId) {
+                // Excluir facturas donde la empresa es también receptora (facturas internas problemáticas)
+                $query->where('receiver_company_id', '!=', $companyId)
+                      ->orWhereNull('receiver_company_id');
+            })
             ->whereYear('issue_date', $year)
             ->whereMonth('issue_date', $month)
             ->where('status', '!=', 'archived') // Excluir solo rechazadas sin CAE

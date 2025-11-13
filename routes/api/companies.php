@@ -38,15 +38,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/companies/{companyId}/afip/update-tax-condition', [App\Http\Controllers\Api\AfipCertificateController::class, 'updateTaxCondition']);
     Route::delete('/companies/{companyId}/afip/certificate', [App\Http\Controllers\Api\AfipCertificateController::class, 'destroy']);
     
-    // AFIP Padron routes
-    Route::get('/companies/{companyId}/afip/fiscal-data', [App\Http\Controllers\Api\AfipPadronController::class, 'getOwnFiscalData']);
-    Route::post('/companies/{companyId}/afip/sync-tax-condition', [App\Http\Controllers\Api\AfipPadronController::class, 'syncTaxCondition']);
-    Route::post('/companies/{companyId}/afip/search-cuit', [App\Http\Controllers\Api\AfipPadronController::class, 'searchByCuit']);
+    // AFIP Padron routes (requieren certificado activo)
+    Route::middleware('validate.afip.certificate')->group(function () {
+        Route::get('/companies/{companyId}/afip/fiscal-data', [App\Http\Controllers\Api\AfipPadronController::class, 'getOwnFiscalData']);
+        Route::post('/companies/{companyId}/afip/sync-tax-condition', [App\Http\Controllers\Api\AfipPadronController::class, 'syncTaxCondition']);
+        Route::post('/companies/{companyId}/afip/search-cuit', [App\Http\Controllers\Api\AfipPadronController::class, 'searchByCuit']);
+    });
     
     // Sales points routes
     Route::get('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'index']);
     Route::post('/companies/{companyId}/sales-points', [App\Http\Controllers\Api\SalesPointController::class, 'store']);
-    Route::post('/companies/{companyId}/sales-points/sync-from-afip', [App\Http\Controllers\Api\SalesPointController::class, 'syncFromAfip']);
+    Route::middleware('validate.afip.certificate')->post('/companies/{companyId}/sales-points/sync-from-afip', [App\Http\Controllers\Api\SalesPointController::class, 'syncFromAfip']);
     Route::post('/companies/{companyId}/sales-points/{salesPoint}/reset-vouchers', [App\Http\Controllers\Api\SalesPointController::class, 'resetVouchers']);
     Route::put('/companies/{companyId}/sales-points/{salesPointId}', [App\Http\Controllers\Api\SalesPointController::class, 'update']);
     Route::delete('/companies/{companyId}/sales-points/{salesPointId}', [App\Http\Controllers\Api\SalesPointController::class, 'destroy']);

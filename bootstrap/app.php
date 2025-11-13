@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth' => \App\Http\Middleware\AuthenticateApi::class,
             'company.member' => \App\Http\Middleware\CheckCompanyMembership::class,
             'company.role' => \App\Http\Middleware\CheckCompanyRole::class,
+            'validate.afip.certificate' => \App\Http\Middleware\ValidateAfipCertificate::class,
         ]);
         
         // Enable custom CORS middleware globally

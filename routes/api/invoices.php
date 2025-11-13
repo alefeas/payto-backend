@@ -10,12 +10,16 @@ Route::get('/associable-for-emit', [InvoiceController::class, 'getAssociableInvo
 Route::get('/associable-for-received', [InvoiceController::class, 'getAssociableInvoicesForReceived']);
 Route::get('/associable-for-issued', [InvoiceController::class, 'getAssociableInvoicesForIssued']);
 Route::delete('/delete-all', [InvoiceController::class, 'deleteAll']);
-Route::post('/', [InvoiceController::class, 'store']);
+// Emisión de facturas electrónicas (requiere certificado AFIP)
+Route::middleware('validate.afip.certificate')->post('/', [InvoiceController::class, 'store']);
 Route::post('/manual-issued', [InvoiceController::class, 'storeManualIssued']);
 Route::post('/manual-received', [InvoiceController::class, 'storeManualReceived']);
 Route::post('/received', [InvoiceController::class, 'storeReceived']);
-Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);
-Route::post('/sync-from-afip', [InvoiceController::class, 'syncFromAfip']);
+// Rutas que requieren certificado AFIP activo
+Route::middleware('validate.afip.certificate')->group(function () {
+    Route::post('/validate-afip', [InvoiceController::class, 'validateWithAfip']);
+    Route::post('/sync-from-afip', [InvoiceController::class, 'syncFromAfip']);
+});
 Route::post('/download-bulk', [InvoiceController::class, 'downloadBulk']);
 Route::get('/{id}', [InvoiceController::class, 'show']);
 Route::put('/{id}/synced', [InvoiceController::class, 'updateSyncedInvoice']);

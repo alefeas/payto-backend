@@ -208,6 +208,7 @@ class AfipPadronService
 
     /**
      * Get mock tax condition - random for testing all scenarios
+     * IMPORTANTE: No incluye final_consumer ya que las empresas no pueden ser consumidor final
      */
     private function getMockTaxCondition(int $lastDigit): string
     {
@@ -215,10 +216,9 @@ class AfipPadronService
             'registered_taxpayer',
             'monotax',
             'exempt',
-            'final_consumer',
         ];
         
-        // Return random condition for testing purposes
+        // Return random condition for testing purposes (sin final_consumer)
         return $conditions[array_rand($conditions)];
     }
 
@@ -253,10 +253,11 @@ class AfipPadronService
     {
         // This mapping depends on AFIP's response structure
         // Adjust based on actual AFIP data
+        // IMPORTANTE: Las empresas no pueden ser consumidor final
         return match($tipoPersona) {
             'FISICA' => 'monotax',
             'JURIDICA' => 'registered_taxpayer',
-            default => 'final_consumer',
+            default => 'registered_taxpayer', // Por defecto responsable inscripto para empresas
         };
     }
 

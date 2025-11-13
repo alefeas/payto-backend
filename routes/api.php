@@ -47,4 +47,7 @@ Route::prefix('v1')->group(function () {
     
     // Notifications routes
     require base_path('routes/api/notifications.php');
+    
+    // AFIP routes
+    require base_path('routes/api/afip.php');
 });
