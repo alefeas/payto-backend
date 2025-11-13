@@ -135,16 +135,8 @@ class InvoiceController extends Controller
                 $totalTaxes += $itemTax;
             }
 
-            // Auto-apply perceptions if company is perception agent
+            // Initialize perceptions from request (auto-apply will be done later after checking client type)
             $perceptionsToApply = $validated['perceptions'] ?? [];
-            if ($company->is_perception_agent && $company->auto_perceptions) {
-                foreach ($company->auto_perceptions as $autoPerception) {
-                    $alreadyAdded = collect($perceptionsToApply)->contains('type', $autoPerception['type']);
-                    if (!$alreadyAdded) {
-                        $perceptionsToApply[] = $autoPerception;
-                    }
-                }
-            }
 
             // Calculate perceptions
             $totalPerceptions = 0;
@@ -174,25 +166,34 @@ class InvoiceController extends Controller
             // Determinar receptor
             $receiverCompanyId = $validated['receiver_company_id'] ?? null;
             $clientId = $validated['client_id'] ?? null;
+            
+            // Determine receiver tax condition before auto-applying perceptions
+            $receiverTaxCondition = null;
+            if ($receiverCompanyId) {
+                $receiverCompany = Company::find($receiverCompanyId);
+                $receiverTaxCondition = $receiverCompany?->tax_condition;
+            } elseif ($clientId) {
+                $client = \App\Models\Client::find($clientId);
+                $receiverTaxCondition = $client?->tax_condition;
+            }
+            
+            // Auto-apply perceptions ONLY if receiver is NOT final consumer
+            if ($company->is_perception_agent && $company->auto_perceptions && $receiverTaxCondition !== 'final_consumer') {
+                foreach ($company->auto_perceptions as $autoPerception) {
+                    $alreadyAdded = collect($perceptionsToApply)->contains('type', $autoPerception['type']);
+                    if (!$alreadyAdded) {
+                        $perceptionsToApply[] = $autoPerception;
+                    }
+                }
+            }
 
-            // Validar percepciones en CF
-            if (!empty($perceptionsToApply)) {
-                $receiverTaxCondition = null;
-                if ($receiverCompanyId) {
-                    $receiverCompany = Company::find($receiverCompanyId);
-                    $receiverTaxCondition = $receiverCompany?->tax_condition;
-                } elseif ($clientId) {
-                    $client = \App\Models\Client::find($clientId);
-                    $receiverTaxCondition = $client?->tax_condition;
-                }
-                
-                if ($receiverTaxCondition === 'final_consumer') {
-                    DB::rollBack();
-                    return response()->json([
-                        'message' => 'No se pueden aplicar percepciones a Consumidores Finales',
-                        'errors' => ['perceptions' => ['Las percepciones no aplican para Consumidores Finales según normativa AFIP']]
-                    ], 422);
-                }
+            // Validar percepciones en CF (should not happen now, but keep as safety check)
+            if (!empty($perceptionsToApply) && $receiverTaxCondition === 'final_consumer') {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'No se pueden aplicar percepciones a Consumidores Finales',
+                    'errors' => ['perceptions' => ['Las percepciones no aplican para Consumidores Finales según normativa AFIP']]
+                ], 422);
             }
             
             // Obtener datos del receptor para guardar en la factura
