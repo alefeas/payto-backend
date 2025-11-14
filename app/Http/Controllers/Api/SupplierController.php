@@ -128,7 +128,7 @@ class SupplierController extends Controller
         $company = Company::findOrFail($companyId);
         $this->authorize('update', [Supplier::class, $company]);
 
-        $supplier = Supplier::where('company_id', $companyId)->findOrFail($id);
+        $supplier = Supplier::where('company_id', $companyId)->withTrashed()->findOrFail($id);
 
         $validated = $request->validate([
             'document_type' => 'nullable|in:CUIT,CUIL,DNI,Pasaporte,CDI',
