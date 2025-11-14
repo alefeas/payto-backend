@@ -181,10 +181,12 @@ class ClientController extends Controller
         }
 
         // Check if client has invoices - if so, block document_number change
+        // EXCEPT when current document_number is the placeholder (00000000)
         if (isset($validated['document_number']) && $validated['document_number'] !== $client->document_number) {
             $hasInvoices = \App\Models\Invoice::where('client_id', $clientId)->exists();
+            $isPlaceholder = in_array($client->document_number, ['00000000', '0000000']);
             
-            if ($hasInvoices) {
+            if ($hasInvoices && !$isPlaceholder) {
                 return $this->error(
                     'No se puede modificar el CUIT/DNI porque este cliente tiene facturas asociadas. Si necesitas cambiar el CUIT, crea un nuevo cliente.',
                     422

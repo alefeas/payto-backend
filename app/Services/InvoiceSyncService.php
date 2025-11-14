@@ -406,6 +406,37 @@ class InvoiceSyncService
                 $clientId = $client->id;
                 $receiverName = $client->business_name ?? trim($client->first_name . ' ' . $client->last_name);
             }
+        } else {
+            // AFIP no devolvió CUIT (Consumidor Final sin DNI o error)
+            // Crear cliente genérico archivado
+            Log::info('No CUIT from AFIP - creating generic client', [
+                'doc_number' => $afipData['doc_number'] ?? 'NULL',
+            ]);
+            
+            // Buscar si ya existe un cliente genérico "Sin CUIT" para esta empresa (reutilizar el mismo)
+            $client = Client::withTrashed()
+                ->where('company_id', $company->id)
+                ->where('business_name', 'Cliente AFIP - Sin CUIT')
+                ->whereNull('document_number')
+                ->first();
+            
+            if (!$client) {
+                $client = Client::create([
+                    'company_id' => $company->id,
+                    'document_type' => 'DNI', // Usar DNI como placeholder
+                    'document_number' => '00000000', // Placeholder que debe ser reemplazado
+                    'business_name' => 'Cliente AFIP - Sin CUIT',
+                    'tax_condition' => 'final_consumer',
+                    'address' => null,
+                    'incomplete_data' => true,
+                ]);
+                $client->delete(); // Archivar inmediatamente
+                $autoCreatedClient = true;
+            }
+            
+            $clientId = $client->id;
+            $receiverName = 'Cliente AFIP - Sin CUIT';
+            $receiverDocument = 'N/A';
         }
         
         return [
