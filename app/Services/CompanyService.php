@@ -85,41 +85,75 @@ class CompanyService implements CompanyServiceInterface
             throw new NotFoundException('Código de invitación inválido');
         }
 
-        $existingMember = CompanyMember::where('company_id', $company->id)
+        // Buscar miembro existente (incluyendo soft-deleted)
+        $existingMember = CompanyMember::withTrashed()
+            ->where('company_id', $company->id)
             ->where('user_id', $userId)
             ->first();
-
-        if ($existingMember) {
-            throw new BadRequestException('Ya eres miembro de esta empresa');
-        }
 
         $user = \App\Models\User::find($userId);
         $userName = trim("{$user->first_name} {$user->last_name}") ?: $user->email;
 
-        CompanyMember::create([
-            'company_id' => $company->id,
-            'user_id' => $userId,
-            'role' => $company->default_role ?? 'operator',
-            'is_active' => true,
-        ]);
+        if ($existingMember) {
+            // Si existe pero está activo, no puede volver a unirse
+            if ($existingMember->is_active && !$existingMember->trashed()) {
+                throw new BadRequestException('Ya eres miembro de esta empresa');
+            }
+            
+            // Reactivar miembro existente (restaurar si está soft-deleted)
+            if ($existingMember->trashed()) {
+                $existingMember->restore();
+            }
+            
+            $existingMember->update([
+                'role' => $company->default_role ?? 'operator',
+                'is_active' => true,
+            ]);
 
-        $this->auditService->log(
-            $company->id,
-            $userId,
-            'member.joined',
-            "Nuevo miembro se unió a la empresa",
-            'CompanyMember',
-            null
-        );
+            $this->auditService->log(
+                $company->id,
+                $userId,
+                'member.rejoined',
+                "Miembro se volvió a unir a la empresa",
+                'CompanyMember',
+                $existingMember->id
+            );
 
-        app(NotificationService::class)->createForCompanyMembers(
-            $company->id,
-            'member_joined',
-            'Nuevo miembro',
-            "{$userName} se unió a la empresa",
-            ['user_id' => $userId, 'user_name' => $userName],
-            $userId
-        );
+            app(NotificationService::class)->createForCompanyMembers(
+                $company->id,
+                'member_rejoined',
+                'Miembro regresó',
+                "{$userName} se volvió a unir a la empresa",
+                ['user_id' => $userId, 'user_name' => $userName],
+                $userId
+            );
+        } else {
+            // Crear nuevo miembro
+            CompanyMember::create([
+                'company_id' => $company->id,
+                'user_id' => $userId,
+                'role' => $company->default_role ?? 'operator',
+                'is_active' => true,
+            ]);
+
+            $this->auditService->log(
+                $company->id,
+                $userId,
+                'member.joined',
+                "Nuevo miembro se unió a la empresa",
+                'CompanyMember',
+                null
+            );
+
+            app(NotificationService::class)->createForCompanyMembers(
+                $company->id,
+                'member_joined',
+                'Nuevo miembro',
+                "{$userName} se unió a la empresa",
+                ['user_id' => $userId, 'user_name' => $userName],
+                $userId
+            );
+        }
 
         return $this->formatCompanyData($company);
     }

@@ -17,9 +17,16 @@ class CheckCompanyRole
             throw new UnauthorizedException('ID de empresa requerido');
         }
 
-        $member = $user->companyMembers()->where('company_id', $companyId)->first();
+        $member = $user->companyMembers()
+            ->where('company_id', $companyId)
+            ->where('is_active', true)
+            ->first();
 
-        if (!$member || !in_array($member->role, $roles)) {
+        if (!$member) {
+            throw new UnauthorizedException('No eres miembro de esta empresa');
+        }
+
+        if (!in_array($member->role, $roles)) {
             throw new UnauthorizedException('No tienes permisos suficientes');
         }
 

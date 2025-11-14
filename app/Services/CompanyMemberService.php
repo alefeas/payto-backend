@@ -149,7 +149,11 @@ class CompanyMemberService implements CompanyMemberServiceInterface
             $this->validateMinimumAdministrators($companyId);
         }
 
+        // Guardar datos ANTES de eliminar
         $userName = trim("{$member->user->first_name} {$member->user->last_name}") ?: $member->user->email;
+        $memberUserId = $member->user_id;
+        $memberRole = $member->role;
+        
         $member->delete();
 
         $this->auditService->log(
@@ -159,7 +163,7 @@ class CompanyMemberService implements CompanyMemberServiceInterface
             "Miembro {$userName} removido de la empresa",
             'CompanyMember',
             $memberId,
-            ['member_role' => $member->role]
+            ['member_role' => $memberRole]
         );
 
         app(NotificationService::class)->createForCompanyMembers(
@@ -167,7 +171,7 @@ class CompanyMemberService implements CompanyMemberServiceInterface
             'member_removed',
             'Miembro removido',
             "{$userName} fue removido de la empresa",
-            ['user_id' => $member->user_id, 'user_name' => $userName, 'role' => $member->role],
+            ['user_id' => $memberUserId, 'user_name' => $userName, 'role' => $memberRole],
             $userId
         );
 

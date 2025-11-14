@@ -32,6 +32,7 @@ class NotificationService
 
     /**
      * Create notifications for all members of a company
+     * Now creates a SINGLE notification for the company (not one per member)
      */
     public function createForCompanyMembers(
         string $companyId,
@@ -41,26 +42,23 @@ class NotificationService
         array $data = [],
         ?string $excludeUserId = null
     ): void {
-        $company = Company::with('members')->find($companyId);
+        $company = Company::find($companyId);
         
         if (!$company) {
             return;
         }
 
-        foreach ($company->members as $member) {
-            if ($excludeUserId && $member->user_id === $excludeUserId) {
-                continue;
-            }
-
-            $this->create(
-                $member->user_id,
-                $companyId,
-                $type,
-                $title,
-                $message,
-                $data
-            );
-        }
+        // Create a single notification for the company
+        // user_id is set to null since it's a company-wide notification
+        Notification::create([
+            'user_id' => null, // Company-wide notification
+            'company_id' => $companyId,
+            'type' => $type,
+            'title' => $title,
+            'message' => $message,
+            'data' => $data,
+            'read' => false,
+        ]);
     }
 
     /**
@@ -80,28 +78,29 @@ class NotificationService
 
     /**
      * Mark all notifications as read for a user in a company
+     * Now marks ALL company notifications as read
      */
     public function markAllAsRead(string $userId, string $companyId): int
     {
-        return Notification::where('user_id', $userId)
-            ->where('company_id', $companyId)
+        return Notification::where('company_id', $companyId)
             ->where('read', false)
             ->update(['read' => true]);
     }
 
     /**
      * Get unread count for a user in a company
+     * Now counts ALL company notifications, not just user-specific ones
      */
     public function getUnreadCount(string $userId, string $companyId): int
     {
-        return Notification::where('user_id', $userId)
-            ->where('company_id', $companyId)
+        return Notification::where('company_id', $companyId)
             ->where('read', false)
             ->count();
     }
 
     /**
      * Get notifications for a user in a company
+     * Now returns ALL company notifications, not just user-specific ones
      */
     public function getNotifications(
         string $userId,
@@ -109,8 +108,8 @@ class NotificationService
         int $limit = 50,
         bool $unreadOnly = false
     ) {
-        $query = Notification::where('user_id', $userId)
-            ->where('company_id', $companyId)
+        // Get all notifications for the company (not filtered by user_id)
+        $query = Notification::where('company_id', $companyId)
             ->with('company:id,business_name')
             ->orderBy('created_at', 'desc')
             ->limit($limit);

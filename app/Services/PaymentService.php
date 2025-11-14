@@ -294,10 +294,10 @@ class PaymentService
             $companyStatuses[(string)$company->id] = 'overpaid';
         } elseif ($balancePending > 0) {
             // Pendiente de pago
-            $companyStatuses[(string)$company->id] = 'pending';
+            $companyStatuses[(string)$company->id] = 'approved';
         } else {
             // Balance 0 o negativo sin pagos
-            $companyStatuses[(string)$company->id] = 'pending';
+            $companyStatuses[(string)$company->id] = 'approved';
         }
         
         $invoice->company_statuses = $companyStatuses;
