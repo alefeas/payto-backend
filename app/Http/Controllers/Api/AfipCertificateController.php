@@ -13,6 +13,24 @@ use Illuminate\Support\Facades\Auth;
 
 class AfipCertificateController extends Controller
 {
+    /**
+     * Verify that the user has permission to manage AFIP certificates
+     * Only owner and administrator can manage certificates
+     */
+    private function checkCertificatePermission($companyId, $user)
+    {
+        $member = \App\Models\CompanyMember::where('company_id', $companyId)
+            ->where('user_id', $user->id)
+            ->where('is_active', true)
+            ->first();
+            
+        if (!$member || !in_array($member->role, ['owner', 'administrator'])) {
+            abort(403, 'No tienes permisos para gestionar certificados AFIP. Solo propietarios y administradores pueden realizar esta acción.');
+        }
+        
+        return $member;
+    }
+
     public function generateCSR(Request $request, $companyId)
     {
         $user = Auth::user();
@@ -21,6 +39,7 @@ class AfipCertificateController extends Controller
         }
         
         $company = $user->companies()->findOrFail($companyId);
+        $this->checkCertificatePermission($companyId, $user);
         
         $cuit = preg_replace('/[^0-9]/', '', $company->national_id ?: '');
         $companyName = $company->business_name ?: $company->name;
@@ -248,6 +267,7 @@ class AfipCertificateController extends Controller
         // Si viene companyId en la URL, usar esa empresa
         if ($companyId) {
             $company = $user->companies()->findOrFail($companyId);
+            $this->checkCertificatePermission($companyId, $user);
         } else {
             // Fallback al método anterior
             $company = $user->company;
@@ -257,6 +277,7 @@ class AfipCertificateController extends Controller
             if (!$company) {
                 return response()->json(['error' => 'No se encontró una empresa asociada al usuario'], 400);
             }
+            $this->checkCertificatePermission($company->id, $user);
         }
 
         try {
@@ -376,6 +397,7 @@ class AfipCertificateController extends Controller
         }
         
         $company = $user->companies()->findOrFail($companyId);
+        $this->checkCertificatePermission($companyId, $user);
         
         $certificateService = new AfipCertificateService();
         $certificateService->deleteCertificate($company);

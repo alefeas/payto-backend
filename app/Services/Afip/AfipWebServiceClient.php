@@ -363,6 +363,24 @@ XML;
     }
 
     /**
+     * Get authentication token
+     */
+    public function getToken(): string
+    {
+        $credentials = $this->getAuthCredentials();
+        return $credentials['token'];
+    }
+
+    /**
+     * Get authentication sign
+     */
+    public function getSign(): string
+    {
+        $credentials = $this->getAuthCredentials();
+        return $credentials['sign'];
+    }
+
+    /**
      * Get authentication array for WSFE requests
      */
     public function getAuthArray(): array
