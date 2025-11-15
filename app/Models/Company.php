@@ -61,8 +61,11 @@ class Company extends Model
 
     public function setTaxConditionAttribute($value)
     {
-        $this->attributes['tax_regime'] = $value;
-        $this->attributes['tax_condition'] = $value;
+        // Only set if value is not empty/null
+        if (!empty($value)) {
+            $this->attributes['tax_regime'] = $value;
+            $this->attributes['tax_condition'] = $value;
+        }
     }
 
     public function members()
