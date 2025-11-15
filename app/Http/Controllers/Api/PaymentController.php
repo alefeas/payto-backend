@@ -56,16 +56,17 @@ class PaymentController extends Controller
                 }
                 
                 // Incluir NC/ND asociadas
+                // Solo mostrar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                 $creditNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $debitNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $data['invoice']['credit_notes_applied'] = $creditNotes->toArray();
@@ -310,16 +311,17 @@ class PaymentController extends Controller
             ->sum('amount');
         
         // Calcular balance pendiente (Total + ND - NC)
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $totalNC = $creditNotes->sum('total');

@@ -124,16 +124,17 @@ class PaymentService
             ->where('status', 'confirmed')
             ->sum('amount');
         
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $totalNC = $creditNotes->sum('total');
@@ -240,16 +241,17 @@ class PaymentService
             ->sum('amount');
         
         // Calcular balance pendiente (Total + ND - NC)
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $totalND = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $balancePending = ($invoice->total ?? 0) + $totalND - $totalNC;
@@ -262,46 +264,48 @@ class PaymentService
             $companyStatuses[(string)$company->id] = 'paid';
             
             // Actualizar NC/ND asociadas
+            // Solo actualizar NC/ND que tengan CAE (fueron autorizadas por AFIP)
             $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
                 ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                 ->where('status', '!=', 'cancelled')
-                ->where('afip_status', 'approved')
+                ->whereNotNull('afip_cae')
                 ->get();
             
             foreach ($creditNotes as $nc) {
                 $ncStatuses = $nc->company_statuses ?: [];
                 $ncStatuses[(string)$company->id] = 'paid';
                 $nc->company_statuses = $ncStatuses;
-                $nc->status = 'paid';
+                // NO modificar el status global de NC
                 $nc->save();
             }
             
             $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
                 ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                 ->where('status', '!=', 'cancelled')
-                ->where('afip_status', 'approved')
+                ->whereNotNull('afip_cae')
                 ->get();
             
             foreach ($debitNotes as $nd) {
                 $ndStatuses = $nd->company_statuses ?: [];
                 $ndStatuses[(string)$company->id] = 'paid';
                 $nd->company_statuses = $ndStatuses;
-                $nd->status = 'paid';
+                // NO modificar el status global de ND
                 $nd->save();
             }
-        } elseif ($totalPaid > 0 && $balancePending < 0) {
-            // Pagó de más (tiene saldo a favor)
-            $companyStatuses[(string)$company->id] = 'overpaid';
-        } elseif ($balancePending > 0) {
-            // Pendiente de pago
-            $companyStatuses[(string)$company->id] = 'approved';
+        } elseif ($totalPaid > 0) {
+            // Pago parcial - mantener el estado actual
+            if (!isset($companyStatuses[(string)$company->id]) || $companyStatuses[(string)$company->id] === 'pending_approval') {
+                $companyStatuses[(string)$company->id] = 'approved';
+            }
         } else {
-            // Balance 0 o negativo sin pagos
-            $companyStatuses[(string)$company->id] = 'approved';
+            // Sin pagos - mantener estado actual o poner approved
+            if (!isset($companyStatuses[(string)$company->id])) {
+                $companyStatuses[(string)$company->id] = 'approved';
+            }
         }
         
         $invoice->company_statuses = $companyStatuses;
-        $invoice->status = $companyStatuses[(string)$company->id];
+        // NO sobrescribir el status global, solo actualizar company_statuses
         $invoice->save();
     }
 

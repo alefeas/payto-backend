@@ -914,6 +914,61 @@ class InvoiceController extends Controller
                 }
             }
             
+            // Validar NC/ND ANTES de crear la factura
+            if (!empty($validated['related_invoice_id'])) {
+                $relatedInvoice = Invoice::find($validated['related_invoice_id']);
+                if ($relatedInvoice) {
+                    // Validar que no esté pagada/cobrada
+                    $companyStatuses = $relatedInvoice->company_statuses ?? [];
+                    foreach ($companyStatuses as $status) {
+                        if (in_array($status, ['paid', 'collected'])) {
+                            DB::rollBack();
+                            return response()->json([
+                                'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
+                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada. Para este caso, cargá la NC/ND sin asociar a ninguna factura para que aparezca en los saldos de NC/ND y puedas gestionarla correctamente.'
+                            ], 422);
+                        }
+                    }
+                    
+                    // Validar que NC no deje saldo negativo
+                    $isNC = in_array($invoiceTypeInternal, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
+                    if ($isNC) {
+                        $availableBalance = $this->calculateAvailableBalance($relatedInvoice, $companyId);
+                        if ($total > $availableBalance) {
+                            DB::rollBack();
+                            
+                            // Calcular NC/ND previas para mensaje más claro (solo las que tienen CAE)
+                            $totalNCPrevias = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                                ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                                ->where('status', '!=', 'cancelled')
+                                ->whereNotNull('afip_cae')
+                                ->sum('total');
+                            
+                            $totalNDPrevias = Invoice::where('related_invoice_id', $relatedInvoice->id)
+                                ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                                ->where('status', '!=', 'cancelled')
+                                ->whereNotNull('afip_cae')
+                                ->sum('total');
+                            
+                            $currency = $relatedInvoice->currency ?? 'ARS';
+                            $errorMsg = "El monto de la Nota de Crédito (" . number_format($total, 2) . " $currency) no puede superar el saldo pendiente de la factura ($" . number_format($availableBalance, 2) . " $currency). ";
+                            $errorMsg .= "Factura original: $" . number_format($relatedInvoice->total, 2) . " $currency";
+                            if ($totalNCPrevias > 0) {
+                                $errorMsg .= " | NC previas: $" . number_format($totalNCPrevias, 2) . " $currency";
+                            }
+                            if ($totalNDPrevias > 0) {
+                                $errorMsg .= " | ND previas: $" . number_format($totalNDPrevias, 2) . " $currency";
+                            }
+                            
+                            return response()->json([
+                                'message' => 'El monto de la NC no puede superar el saldo disponible',
+                                'error' => $errorMsg
+                            ], 422);
+                        }
+                    }
+                }
+            }
+            
             // Create manual issued invoice (NO enviar a empresa conectada)
             Log::info('Creating manual issued invoice with data', [
                 'client_id' => $clientId,
@@ -1022,35 +1077,8 @@ class InvoiceController extends Controller
                 ]);
             }
 
-            // Si es NC/ND con factura relacionada, validar que no esté pagada/cobrada y que no deje saldo negativo
+            // Actualizar balance de factura relacionada (ya se validó antes de crear)
             if (isset($validated['related_invoice_id'])) {
-                $relatedInvoice = Invoice::find($validated['related_invoice_id']);
-                if ($relatedInvoice) {
-                    $companyStatuses = $relatedInvoice->company_statuses ?? [];
-                    foreach ($companyStatuses as $status) {
-                        if (in_array($status, ['paid', 'collected'])) {
-                            DB::rollBack();
-                            return response()->json([
-                                'message' => 'No se puede asociar NC/ND a una factura ya pagada/cobrada',
-                                'error' => 'La factura relacionada ya fue marcada como pagada o cobrada. Para este caso, cargá la NC/ND sin asociar a ninguna factura para que aparezca en los saldos de NC/ND y puedas gestionarla correctamente.'
-                            ], 422);
-                        }
-                    }
-                    
-                    // Validar que NC no deje saldo negativo
-                    $isNC = in_array($invoiceTypeInternal, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
-                    if ($isNC) {
-                        $availableBalance = $this->calculateAvailableBalance($relatedInvoice, $companyId);
-                        if ($total > $availableBalance) {
-                            DB::rollBack();
-                            return response()->json([
-                                'message' => 'El monto de la NC no puede superar el saldo disponible',
-                                'error' => "Saldo disponible: " . number_format($availableBalance, 2) . " " . ($relatedInvoice->currency ?? 'ARS') . ". Monto ingresado: " . number_format($total, 2) . " " . $validated['currency']
-                            ], 422);
-                        }
-                    }
-                }
-                
                 $this->invoiceService->updateRelatedInvoiceBalance($validated['related_invoice_id']);
             }
             
@@ -2438,17 +2466,18 @@ class InvoiceController extends Controller
     {
         // Always recalculate to ensure accuracy (balance_pending might be stale)
         // Calculate total NC (credit notes) associated with this invoice
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae') // Solo contar las que tienen CAE
             ->sum('total');
         
         // Calculate total ND (debit notes) associated with this invoice
         $totalND = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae') // Solo contar las que tienen CAE
             ->sum('total');
         
         // Balance = Total + ND - NC (SIN incluir pagos/cobros)
@@ -2469,14 +2498,17 @@ class InvoiceController extends Controller
         }
         
         // RECALCULAR SALDO: Total + ND - NC (SIN incluir pagos/cobros)
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         // Saldo = Total + ND - NC (solo ND/NC afectan el balance)

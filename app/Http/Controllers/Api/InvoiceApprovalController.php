@@ -56,9 +56,9 @@ class InvoiceApprovalController extends Controller
         $requiredApprovals = $company->required_approvals ?? 0;
         
         if ($requiredApprovals === 0 || $invoice->approvals_received >= $requiredApprovals) {
-            // Guardar estado en JSON por empresa
+            // Guardar estado en JSON por empresa (usar string como clave)
             $companyStatuses = $invoice->company_statuses ?: [];
-            $companyStatuses[(int)$companyId] = 'approved';
+            $companyStatuses[(string)$companyId] = 'approved';
             
             $invoice->company_statuses = $companyStatuses;
             $invoice->approval_date = now();
@@ -72,7 +72,7 @@ class InvoiceApprovalController extends Controller
             
             foreach ($creditNotes as $nc) {
                 $ncStatuses = $nc->company_statuses ?: [];
-                $ncStatuses[(int)$companyId] = 'approved';
+                $ncStatuses[(string)$companyId] = 'approved';
                 $nc->company_statuses = $ncStatuses;
                 $nc->status = 'approved';
                 $nc->save();
@@ -85,7 +85,7 @@ class InvoiceApprovalController extends Controller
             
             foreach ($debitNotes as $nd) {
                 $ndStatuses = $nd->company_statuses ?: [];
-                $ndStatuses[(int)$companyId] = 'approved';
+                $ndStatuses[(string)$companyId] = 'approved';
                 $nd->company_statuses = $ndStatuses;
                 $nd->status = 'approved';
                 $nd->save();
@@ -118,9 +118,9 @@ class InvoiceApprovalController extends Controller
             return $this->error('No se puede rechazar una factura con pagos registrados', 422);
         }
 
-        // Actualizar estado solo para esta empresa
+        // Actualizar estado solo para esta empresa (usar string como clave)
         $companyStatuses = $invoice->company_statuses ?: [];
-        $companyStatuses[(int)$companyId] = 'rejected';
+        $companyStatuses[(string)$companyId] = 'rejected';
         
         $invoice->company_statuses = $companyStatuses;
         $invoice->rejection_reason = $request->input('reason');

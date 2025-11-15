@@ -299,15 +299,18 @@ class VoucherValidationService
     {
         // Always recalculate to ensure accuracy (balance_pending might be stale)
         // Calculate total NC (credit notes) associated with this invoice
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         // Calculate total ND (debit notes) associated with this invoice
         $totalND = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         // Determine if invoice is issued (by this company) or received

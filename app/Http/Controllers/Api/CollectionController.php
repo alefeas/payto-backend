@@ -60,16 +60,17 @@ class CollectionController extends Controller
                 }
                 
                 // Incluir NC/ND asociadas
+                // Solo mostrar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                 $creditNotes = Invoice::where('related_invoice_id', $collection->invoice->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $debitNotes = Invoice::where('related_invoice_id', $collection->invoice->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $data['invoice']['credit_notes_applied'] = $creditNotes->toArray();
@@ -309,16 +310,17 @@ class CollectionController extends Controller
             ->sum('amount');
         
         // Calcular balance pendiente (Total + ND - NC)
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
-            ->where('afip_status', 'approved')
+            ->whereNotNull('afip_cae')
             ->get();
         
         $totalNC = $creditNotes->sum('total');
@@ -338,7 +340,6 @@ class CollectionController extends Controller
                 $ncStatuses = $nc->company_statuses ?: [];
                 $ncStatuses[(string)$companyId] = 'collected';
                 $nc->company_statuses = $ncStatuses;
-                $nc->status = 'collected';
                 $nc->save();
             }
             
@@ -346,22 +347,24 @@ class CollectionController extends Controller
                 $ndStatuses = $nd->company_statuses ?: [];
                 $ndStatuses[(string)$companyId] = 'collected';
                 $nd->company_statuses = $ndStatuses;
-                $nd->status = 'collected';
                 $nd->save();
             }
-        } elseif ($totalCollected > 0 && $balancePending < 0) {
-            // Cobró de más (tiene saldo a favor del cliente)
-            $companyStatuses[(string)$companyId] = 'overpaid';
-        } elseif ($balancePending > 0) {
-            // Pendiente de cobro
-            $companyStatuses[(string)$companyId] = 'issued';
+        } elseif ($totalCollected > 0) {
+            // Cobro parcial - mantener el estado actual (issued o approved)
+            // No cambiar el estado si ya hay cobros parciales
+            if (!isset($companyStatuses[(string)$companyId]) || $companyStatuses[(string)$companyId] === 'pending_approval') {
+                $companyStatuses[(string)$companyId] = 'issued';
+            }
+            // Si ya estaba en issued o approved, mantenerlo
         } else {
-            // Balance 0 o negativo sin cobros
-            $companyStatuses[(string)$companyId] = 'issued';
+            // Sin cobros - mantener estado actual o poner issued
+            if (!isset($companyStatuses[(string)$companyId])) {
+                $companyStatuses[(string)$companyId] = 'issued';
+            }
         }
         
         $invoice->company_statuses = $companyStatuses;
-        $invoice->status = $companyStatuses[(string)$companyId];
+        // NO sobrescribir el status global, solo actualizar company_statuses
         $invoice->save();
     }
 }

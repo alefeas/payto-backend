@@ -227,13 +227,13 @@ class InvoiceService
         
         // Use company statuses from JSON
         $companyStatuses = $invoice->company_statuses ?: [];
-        $companyIdInt = (int)$companyId;
+        $companyIdStr = (string)$companyId;
         
         // Prioritize cancelled if invoice is cancelled
         if ($invoice->status === 'cancelled') {
             $invoice->display_status = 'cancelled';
-        } elseif (isset($companyStatuses[$companyIdInt])) {
-            $invoice->display_status = $companyStatuses[$companyIdInt];
+        } elseif (isset($companyStatuses[$companyIdStr])) {
+            $invoice->display_status = $companyStatuses[$companyIdStr];
         } else {
             // Fallback to global status
             if ($invoice->direction === 'issued') {
@@ -258,15 +258,18 @@ class InvoiceService
         $invoice->available_balance = $invoice->balance_pending ?? $invoice->total ?? 0;
         
         // Add associated NC/ND details
+        // Solo mostrar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $invoice->credit_notes_applied = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
             ->get();
         
         $invoice->debit_notes_applied = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
             ->get();
         
@@ -316,21 +319,25 @@ class InvoiceService
         }
         
         // Recalculate balance_pending considering NC/ND
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $totalND = Invoice::where('related_invoice_id', $invoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $total = $invoice->total ?? 0;
         $adjustedTotal = $total + $totalND - $totalNC;
         $invoice->paid_amount = $paidAmount;
         $invoice->pending_amount = $adjustedTotal - $paidAmount;
-        $invoice->balance_pending = $invoice->pending_amount;
+        // NO sobrescribir balance_pending - es un campo global que solo debe actualizarse con NC/ND
+        // balance_pending se mantiene para tracking de NC/ND, pending_amount es específico por empresa
         
         // Cancelled invoices don't have payment_status
         if ($invoice->status === 'cancelled') {
@@ -394,14 +401,17 @@ class InvoiceService
         }
         
         // RECALCULAR SALDO: Total + ND - NC (SIN incluir pagos/cobros)
+        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
             ->where('status', '!=', 'cancelled')
+            ->whereNotNull('afip_cae')
             ->sum('total');
         
         // Saldo = Total + ND - NC (solo ND/NC afectan el balance)

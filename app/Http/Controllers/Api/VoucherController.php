@@ -574,15 +574,16 @@ class VoucherController extends Controller
                 // Validar que NC no deje saldo negativo
                 $isNC = in_array($type, ['NCA', 'NCB', 'NCC', 'NCM', 'NCE']);
                 if ($isNC) {
+                    // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                     $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
                         ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                         ->where('status', '!=', 'cancelled')
-                        ->where('afip_status', 'approved')
+                        ->whereNotNull('afip_cae')
                         ->sum('total');
                     $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
                         ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                         ->where('status', '!=', 'cancelled')
-                        ->where('afip_status', 'approved')
+                        ->whereNotNull('afip_cae')
                         ->sum('total');
                     $availableBalance = ($relatedInvoice->total ?? 0) + $totalND - $totalNC;
                     

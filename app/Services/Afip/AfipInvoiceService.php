@@ -409,6 +409,8 @@ class AfipInvoiceService
         }
         
         $monId = $this->mapSystemCurrencyToAfip($invoice->currency ?? 'ARS');
+        // AFIP espera la cotización directa (ej: 1166.12 para USD)
+        // NO multiplicada por 10000
         $monCotiz = ($invoice->currency ?? 'ARS') === 'ARS' ? 1 : ($invoice->exchange_rate ?? 1);
         
         Log::info('Currency data for AFIP', [
@@ -416,6 +418,7 @@ class AfipInvoiceService
             'invoice_currency' => $invoice->currency,
             'mapped_MonId' => $monId,
             'MonCotiz' => $monCotiz,
+            'exchange_rate_in_db' => $invoice->exchange_rate,
         ]);
         
         $detRequest = [
@@ -469,16 +472,17 @@ class AfipInvoiceService
                     if ($category === 'credit_note') {
                         // Recalcular balance actual considerando NC/ND previas Y cobros/pagos
                         // Usar el mismo cálculo que en VoucherValidationService y InvoiceController
+                        // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                         $totalNC = Invoice::where('related_invoice_id', $relatedInvoice->id)
                             ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                             ->where('status', '!=', 'cancelled')
-                            ->where('afip_status', 'approved')
+                            ->whereNotNull('afip_cae')
                             ->sum('total');
                         
                         $totalND = Invoice::where('related_invoice_id', $relatedInvoice->id)
                             ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                             ->where('status', '!=', 'cancelled')
-                            ->where('afip_status', 'approved')
+                            ->whereNotNull('afip_cae')
                             ->sum('total');
                         
                         // Determinar si la factura es emitida o recibida
@@ -913,10 +917,11 @@ class AfipInvoiceService
             $afipCurrency = $invoice->MonId ?? 'PES';
             $systemCurrency = $this->mapAfipCurrency($afipCurrency);
             
-            // AFIP devuelve la cotización multiplicada por 10000
-            // Ejemplo: EUR a 1152.125 pesos = 11521250 en AFIP
+            // AFIP devuelve la cotización directa (ej: 1166.12 para USD)
+            // NO multiplicada por 10000 como se pensaba originalmente
             $afipExchangeRate = $invoice->MonCotiz ?? 1;
-            $exchangeRate = $afipExchangeRate > 100 ? $afipExchangeRate / 10000 : $afipExchangeRate;
+            // Usar el valor directamente
+            $exchangeRate = $afipExchangeRate;
             
             Log::info('Currency mapping from AFIP', [
                 'afip_currency' => $afipCurrency,

@@ -167,16 +167,17 @@ class SupplierPaymentController extends Controller
                 }
                 
                 // Incluir NC/ND asociadas
+                // Solo mostrar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                 $creditNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $debitNotes = Invoice::where('related_invoice_id', $payment->invoice->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
-                    ->where('afip_status', 'approved')
+                    ->whereNotNull('afip_cae')
                     ->get(['id', 'type', 'sales_point', 'voucher_number', 'total']);
                 
                 $invoiceData['credit_notes_applied'] = $creditNotes->toArray();
