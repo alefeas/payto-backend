@@ -347,7 +347,7 @@ class InvoiceService
                 'status' => $invoice->status,
                 'display_status' => $invoice->display_status ?? 'not set yet',
             ]);
-        } elseif ($paidAmount >= $adjustedTotal) {
+        } elseif ($paidAmount >= $adjustedTotal - 0.01) { // Tolerance of 1 cent for rounding
             // Set payment status based on invoice direction (operation type)
             if ($invoice->direction === 'issued') {
                 $invoice->payment_status = 'collected'; // Cobrada
