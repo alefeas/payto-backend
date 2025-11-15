@@ -36,14 +36,17 @@ class AccountsPayableController extends Controller
                 $invoice->paid_amount = $invoice->payments->sum('amount');
                 
                 // Calcular total ajustado considerando NC/ND relacionadas
+                // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                 $totalNC = Invoice::where('related_invoice_id', $invoice->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
+                    ->whereNotNull('afip_cae')
                     ->sum('total');
                 
                 $totalND = Invoice::where('related_invoice_id', $invoice->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
+                    ->whereNotNull('afip_cae')
                     ->sum('total');
                 
                 $adjustedTotal = ($invoice->total ?? 0) + $totalND - $totalNC;
@@ -52,13 +55,16 @@ class AccountsPayableController extends Controller
         
             // Métricas principales - usar pending_amount que ya considera NC/ND
             $totalPayable = $allInvoices->sum(function($inv) {
+                // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
                 $totalNC = Invoice::where('related_invoice_id', $inv->id)
                     ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
                     ->where('status', '!=', 'cancelled')
+                    ->whereNotNull('afip_cae')
                     ->sum('total');
                 $totalND = Invoice::where('related_invoice_id', $inv->id)
                     ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
                     ->where('status', '!=', 'cancelled')
+                    ->whereNotNull('afip_cae')
                     ->sum('total');
                 return ($inv->total ?? 0) + $totalND - $totalNC;
             });

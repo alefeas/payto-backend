@@ -2176,14 +2176,17 @@ class InvoiceController extends Controller
             })
             ->whereIn('type', $compatibleTypes)
             ->where('status', '!=', 'cancelled')
-            ->with(['client', 'receiverCompany', 'collections', 'creditNotes', 'debitNotes'])
+            ->with(['client' => function($query) {
+                $query->withTrashed(); // Include archived clients
+            }, 'receiverCompany', 'collections', 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
                 // Calcular si está totalmente cobrada
                 $collectedAmount = $inv->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
-                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
-                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
                 $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
                 
                 // Excluir si está totalmente cobrada
@@ -2214,13 +2217,27 @@ class InvoiceController extends Controller
                     default => ucfirst($inv->status)
                 };
                 
-                // Build receiver name properly
-                $receiverName = $inv->receiver_name;
-                if (!$receiverName && $inv->receiverCompany) {
-                    $receiverName = $inv->receiverCompany->name;
+                // Build receiver name properly - try all possible sources
+                $receiverName = null;
+                
+                // 1. Try receiverCompany (otra empresa del sistema)
+                if ($inv->receiverCompany) {
+                    $receiverName = $inv->receiverCompany->business_name ?? $inv->receiverCompany->name;
                 }
+                
+                // 2. Try client (cliente externo)
                 if (!$receiverName && $inv->client) {
-                    $receiverName = $inv->client->business_name ?? trim(($inv->client->first_name ?? '') . ' ' . ($inv->client->last_name ?? ''));
+                    $receiverName = $inv->client->business_name;
+                    if (!$receiverName) {
+                        $firstName = $inv->client->first_name ?? '';
+                        $lastName = $inv->client->last_name ?? '';
+                        $receiverName = trim($firstName . ' ' . $lastName);
+                    }
+                }
+                
+                // 3. Try receiver_name field (fallback)
+                if (!$receiverName) {
+                    $receiverName = $inv->receiver_name;
                 }
                 
                 return [
@@ -2282,7 +2299,9 @@ class InvoiceController extends Controller
             $query->where('issuer_document', $validated['issuer_document']);
         }
         
-        $invoices = $query->with(['supplier', 'creditNotes', 'debitNotes'])
+        $invoices = $query->with(['supplier' => function($query) {
+                $query->withTrashed(); // Include archived suppliers
+            }, 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
@@ -2292,8 +2311,9 @@ class InvoiceController extends Controller
                     ->where('company_id', $companyId)
                     ->whereIn('status', ['confirmed', 'in_process'])
                     ->sum('amount');
-                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
-                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
                 $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
                 
                 // Excluir si está totalmente pagada
@@ -2324,10 +2344,22 @@ class InvoiceController extends Controller
                     default => ucfirst($inv->status)
                 };
                 
-                // Build issuer name properly
-                $issuerName = $inv->issuer_name;
-                if (!$issuerName && $inv->supplier) {
-                    $issuerName = $inv->supplier->business_name ?? trim(($inv->supplier->first_name ?? '') . ' ' . ($inv->supplier->last_name ?? ''));
+                // Build issuer name properly - try all possible sources
+                $issuerName = null;
+                
+                // 1. Try supplier (proveedor externo)
+                if ($inv->supplier) {
+                    $issuerName = $inv->supplier->business_name;
+                    if (!$issuerName) {
+                        $firstName = $inv->supplier->first_name ?? '';
+                        $lastName = $inv->supplier->last_name ?? '';
+                        $issuerName = trim($firstName . ' ' . $lastName);
+                    }
+                }
+                
+                // 2. Try issuer_name field (fallback)
+                if (!$issuerName) {
+                    $issuerName = $inv->issuer_name;
                 }
                 
                 return [
@@ -2390,14 +2422,17 @@ class InvoiceController extends Controller
             $query->where('receiver_document', $validated['receiver_document']);
         }
         
-        $invoices = $query->with(['client', 'collections', 'creditNotes', 'debitNotes'])
+        $invoices = $query->with(['client' => function($query) {
+                $query->withTrashed(); // Include archived clients
+            }, 'collections', 'creditNotes', 'debitNotes'])
             ->orderBy('issue_date', 'desc')
             ->get()
             ->filter(function($inv) use ($companyId) {
                 // Calcular si está totalmente cobrada
                 $collectedAmount = $inv->collections->where('company_id', $companyId)->where('status', 'confirmed')->sum('amount');
-                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->sum('total');
-                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->sum('total');
+                // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
+                $totalNC = $inv->creditNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
+                $totalND = $inv->debitNotes->where('status', '!=', 'cancelled')->whereNotNull('afip_cae')->sum('total');
                 $adjustedTotal = ($inv->total ?? 0) + $totalND - $totalNC;
                 
                 // Excluir si está totalmente cobrada
@@ -2428,10 +2463,22 @@ class InvoiceController extends Controller
                     default => ucfirst($inv->status)
                 };
                 
-                // Build receiver name properly
-                $receiverName = $inv->receiver_name;
-                if (!$receiverName && $inv->client) {
-                    $receiverName = $inv->client->business_name ?? trim(($inv->client->first_name ?? '') . ' ' . ($inv->client->last_name ?? ''));
+                // Build receiver name properly - try all possible sources
+                $receiverName = null;
+                
+                // 1. Try client (cliente externo)
+                if ($inv->client) {
+                    $receiverName = $inv->client->business_name;
+                    if (!$receiverName) {
+                        $firstName = $inv->client->first_name ?? '';
+                        $lastName = $inv->client->last_name ?? '';
+                        $receiverName = trim($firstName . ' ' . $lastName);
+                    }
+                }
+                
+                // 2. Try receiver_name field (fallback)
+                if (!$receiverName) {
+                    $receiverName = $inv->receiver_name;
                 }
                 
                 return [
