@@ -50,4 +50,7 @@ Route::prefix('v1')->group(function () {
     
     // AFIP routes
     require base_path('routes/api/afip.php');
+    
+    // Contact routes (public)
+    Route::post('/contact', [\App\Http\Controllers\Api\ContactController::class, 'store']);
 });
