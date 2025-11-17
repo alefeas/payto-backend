@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6; 
             color: #1a1a1a;
             background: linear-gradient(135deg, #002bff 0%, #0078ff 50%, #0000d4 100%);
@@ -16,20 +16,19 @@
             max-width: 600px; 
             margin: 0 auto; 
             background: #ffffff;
-            border-radius: 16px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
         }
         .header {
             background: #ffffff;
-            padding: 40px 40px 30px;
+            padding: 32px 40px;
             text-align: center;
-            border-bottom: 1px solid #eeeeee;
+            border-bottom: none;
         }
         .logo {
-            font-size: 36px;
-            font-weight: 700;
-            color: #002bff;
+            font-size: 40px;
+            font-weight: 800;
+            color: #ffffff;
             margin: 0;
             letter-spacing: -1px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -39,86 +38,104 @@
         }
         .greeting {
             font-size: 24px;
-            font-weight: 600;
+            font-weight: 700;
             color: #1a1a1a;
-            margin: 0 0 20px 0;
+            margin: 0 0 24px 0;
         }
         .content p {
             color: #4a5568;
             font-size: 16px;
-            line-height: 1.6;
+            line-height: 1.7;
             margin: 16px 0;
         }
         .button-container {
             text-align: center;
-            margin: 36px 0;
+            margin: 40px 0;
         }
         .button { 
             display: inline-block;
-            padding: 16px 40px;
-            background: #002bff;
+            padding: 16px 48px;
+            background: linear-gradient(135deg, #002bff 0%, #0078ff 50%, #0000d4 100%);
             color: #ffffff !important;
             text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
+            font-weight: 700;
             font-size: 16px;
+            border-radius: 6px;
             box-shadow: 0 4px 12px rgba(0, 43, 255, 0.4);
+            transition: opacity 0.2s ease;
+        }
+        .button:hover {
+            opacity: 0.9;
         }
         .link-box {
-            background: #f7fafc;
+            background: #ffffff;
             border: 1px solid #e2e8f0;
-            border-radius: 8px;
             padding: 16px 20px;
             margin: 24px 0;
             word-break: break-all;
+            border-radius: 8px;
         }
         .link-box p {
             margin: 0;
             font-size: 13px;
             color: #002bff;
             font-family: 'Courier New', monospace;
-            line-height: 1.5;
+            line-height: 1.6;
+            font-weight: 500;
         }
         .info-box { 
-            background: #f7fafc;
-            border-left: 4px solid #002bff;
-            border-radius: 8px;
-            padding: 20px 24px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            padding: 16px 20px;
             margin: 28px 0;
+            border-radius: 8px;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+        }
+        .info-content {
+            flex: 1;
         }
         .info-box p {
             margin: 0;
             color: #4a5568;
             font-size: 14px;
-            line-height: 1.6;
+            line-height: 1.7;
         }
         .info-box strong {
-            color: #002bff;
+            color: #1a1a1a;
             font-weight: 600;
         }
         .footer { 
-            background: #f7fafc;
-            padding: 32px 40px;
+            background: #ffffff;
+            padding: 40px;
             text-align: center;
-            border-top: 1px solid #eeeeee;
+            border-top: 1px solid #e2e8f0;
         }
         .footer p {
             margin: 8px 0;
             font-size: 13px;
             color: #718096;
-            line-height: 1.5;
+            line-height: 1.6;
         }
         .footer .company {
             color: #002bff;
-            font-weight: 600;
-            font-size: 14px;
+            font-weight: 700;
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+        .footer-logo {
+            height: 40px;
+            width: auto;
+            display: block;
+            margin: 0 auto 20px;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1 class="logo">PayTo</h1>
+            <img src="{{ url('images/payto.png') }}" alt="PayTo" style="height: 50px; width: auto; display: block; margin: 0 auto;">
         </div>
         
         <div class="content">
@@ -138,15 +155,16 @@
             </div>
             
             <div class="info-box">
-                <p><strong>Nota importante:</strong> Este enlace expirará en 1 hora por razones de seguridad.</p>
+                <div class="info-content">
+                    <p><strong>Nota importante:</strong> Este enlace expirará en 1 hora por razones de seguridad.</p>
+                </div>
             </div>
             
             <p style="color: #718096; font-size: 14px;">Si no solicitaste este cambio, puedes ignorar este mensaje. Tu contraseña permanecerá sin cambios.</p>
         </div>
         
         <div class="footer">
-            <p class="company">PayTo</p>
-            <p>Sistema de Gestión de Facturación</p>
+            <img src="{{ url('images/payto.png') }}" alt="PayTo" class="footer-logo">
             <p>Este es un mensaje automático. Por favor, no respondas a este correo.</p>
             <p>&copy; {{ date('Y') }} Todos los derechos reservados</p>
         </div>
