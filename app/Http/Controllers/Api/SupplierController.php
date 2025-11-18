@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Company;
 use App\Models\Supplier;
+use App\Repositories\SupplierRepository;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\Request;
 
@@ -12,11 +13,18 @@ class SupplierController extends Controller
 {
     use AuthorizesRequests;
 
+    private SupplierRepository $supplierRepository;
+
+    public function __construct(SupplierRepository $supplierRepository)
+    {
+        $this->supplierRepository = $supplierRepository;
+    }
+
     public function index(Request $request, $companyId)
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('viewAny', [Supplier::class, $company]);
-        $suppliers = Supplier::where('company_id', $companyId)->get();
+        $suppliers = $this->supplierRepository->getByCompanyId($companyId);
         return response()->json($suppliers);
     }
 
@@ -24,10 +32,7 @@ class SupplierController extends Controller
     {
         $company = Company::findOrFail($companyId);
         $this->authorize('viewAny', [Supplier::class, $company]);
-        $suppliers = Supplier::where('company_id', $companyId)
-            ->onlyTrashed()
-            ->orderBy('deleted_at', 'desc')
-            ->get();
+        $suppliers = $this->supplierRepository->getTrashedByCompanyId($companyId);
         return response()->json($suppliers);
     }
 
@@ -40,7 +45,7 @@ class SupplierController extends Controller
             ->onlyTrashed()
             ->findOrFail($id);
         
-        $supplier->restore();
+        $this->supplierRepository->restore($id);
 
         // Auditoría empresa: restauración de proveedor externo
         app(\App\Services\AuditService::class)->log(
@@ -94,12 +99,8 @@ class SupplierController extends Controller
         }
 
         // Check for duplicate (including soft deleted)
-        $existing = Supplier::where('company_id', $companyId)
-            ->where('document_number', $validated['document_number'])
-            ->withTrashed()
-            ->first();
-
-        if ($existing) {
+        if ($this->supplierRepository->checkDuplicateDocument($companyId, $validated['document_number'])) {
+            $existing = $this->supplierRepository->findByDocumentAndCompany($companyId, $validated['document_number']);
             if ($existing->trashed()) {
                 return response()->json([
                     'message' => 'Ya existe un proveedor archivado con este CUIT. Restaura el proveedor existente desde la sección "Proveedores archivados" para editarlo.'
@@ -180,13 +181,8 @@ class SupplierController extends Controller
             }
             
             // Check for duplicate (including soft deleted)
-            $existing = Supplier::where('company_id', $companyId)
-                ->where('document_number', $validated['document_number'])
-                ->where('id', '!=', $id)
-                ->withTrashed()
-                ->first();
-
-            if ($existing) {
+            if ($this->supplierRepository->checkDuplicateDocument($companyId, $validated['document_number'], $id)) {
+                $existing = $this->supplierRepository->findByDocumentAndCompany($companyId, $validated['document_number']);
                 if ($existing->trashed()) {
                     return response()->json([
                         'message' => 'Ya existe un proveedor archivado con este CUIT. No puedes usar un CUIT duplicado.'

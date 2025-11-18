@@ -116,14 +116,6 @@ class CollectionController extends Controller
         try {
             $collection = Collection::create($validated);
             
-            // Si la colección se crea como confirmada, actualizar company_statuses JSON
-            if ($collection->status === 'confirmed') {
-                $invoice = Invoice::find($collection->invoice_id);
-                if ($invoice) {
-                    $this->updateInvoiceCollectionStatus($invoice, $companyId);
-                }
-            }
-            
             DB::commit();
 
             // Auditoría empresa: cobro creado

@@ -112,23 +112,18 @@ class SupplierPaymentController extends Controller
 
     public function index(Request $request, string $companyId)
     {
-        $query = Payment::where('company_id', $companyId)
-            ->with(['invoice.issuerCompany', 'invoice.supplier', 'retentions', 'registeredBy'])
-            ->whereHas('invoice');
-        
+        $filters = [];
         if ($request->has('status')) {
-            $query->where('status', $request->status);
+            $filters['status'] = $request->status;
         }
-        
         if ($request->has('from_date')) {
-            $query->where('payment_date', '>=', $request->from_date);
+            $filters['from_date'] = $request->from_date;
         }
-        
         if ($request->has('to_date')) {
-            $query->where('payment_date', '<=', $request->to_date);
+            $filters['to_date'] = $request->to_date;
         }
         
-        $payments = $query->orderByDesc('payment_date')->get();
+        $payments = $this->paymentService->getSupplierPaymentsByCompany($companyId, $filters);
         
         return response()->json([
             'success' => true,

@@ -5,21 +5,27 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Payment;
 use App\Models\Invoice;
+use App\Repositories\PaymentRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class PaymentController extends Controller
 {
+    private PaymentRepository $paymentRepository;
+
+    public function __construct(PaymentRepository $paymentRepository)
+    {
+        $this->paymentRepository = $paymentRepository;
+    }
+
     public function index(Request $request, $companyId)
     {
-        $query = Payment::with(['invoice.supplier', 'invoice.issuerCompany', 'registeredBy', 'confirmedBy'])
-            ->where('company_id', $companyId);
-
+        $filters = [];
         if ($request->has('status')) {
-            $query->where('status', $request->status);
+            $filters['status'] = $request->status;
         }
 
-        $payments = $query->orderBy('payment_date', 'desc')->get();
+        $payments = $this->paymentRepository->getByCompanyId($companyId, $filters);
         
         // Format payments to ensure proper data structure
         $formatted = $payments->map(function($payment) {
@@ -210,9 +216,7 @@ class PaymentController extends Controller
             // Recalcular estado de factura
             $invoice = Invoice::find($invoiceId);
             if ($invoice) {
-                $totalPaid = Payment::where('invoice_id', $invoice->id)
-                    ->where('status', 'confirmed')
-                    ->sum('amount');
+                $totalPaid = $this->paymentRepository->getTotalPaidForInvoice($invoiceId);
                 
                 if ($totalPaid < $invoice->total) {
                     // Si ya no está totalmente pagada, actualizar company_statuses y restaurar status global
@@ -278,10 +282,7 @@ class PaymentController extends Controller
             'payment_ids.*' => 'exists:invoice_payments_tracking,id',
         ]);
 
-        $payments = Payment::with(['invoice.supplier'])
-            ->where('company_id', $companyId)
-            ->whereIn('id', $validated['payment_ids'])
-            ->get();
+        $payments = $this->paymentRepository->getByInvoiceIds($validated['payment_ids'], $companyId);
 
         // Validate all suppliers have CBU
         foreach ($payments as $payment) {
@@ -306,9 +307,7 @@ class PaymentController extends Controller
 
     private function updateInvoicePaymentStatus(Invoice $invoice, string $companyId): void
     {
-        $totalPaid = Payment::where('invoice_id', $invoice->id)
-            ->where('status', 'confirmed')
-            ->sum('amount');
+        $totalPaid = $this->paymentRepository->getTotalPaidForInvoice($invoice->id);
         
         // Calcular balance pendiente (Total + ND - NC)
         // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)

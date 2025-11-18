@@ -351,4 +351,10 @@ class PaymentService
         
         return implode("\n", $lines);
     }
+
+    public function getSupplierPaymentsByCompany(string $companyId, array $filters = [])
+    {
+        $paymentRepository = app(\App\Repositories\PaymentRepository::class);
+        return $paymentRepository->getSupplierPaymentsByCompany($companyId, $filters);
+    }
 }
