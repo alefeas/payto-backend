@@ -264,15 +264,16 @@ class CompanyService implements CompanyServiceInterface
         $company->refresh();
 
         // Auto-approve pending invoices based on new required_approvals
+        // Only update invoices where THIS company is the receiver (needs to approve)
         if (isset($data['required_approvals'])) {
             $newRequiredApprovals = (int)$data['required_approvals'];
             
-            // Update all pending invoices with new requirement
+            // Update all pending invoices received by this company with new requirement
             \App\Models\Invoice::where('receiver_company_id', $companyId)
                 ->where('status', 'pending_approval')
                 ->update(['approvals_required' => $newRequiredApprovals]);
             
-            // If 0, approve all pending invoices
+            // If 0, approve all pending invoices received by this company
             if ($newRequiredApprovals === 0) {
                 \App\Models\Invoice::where('receiver_company_id', $companyId)
                     ->where('status', 'pending_approval')

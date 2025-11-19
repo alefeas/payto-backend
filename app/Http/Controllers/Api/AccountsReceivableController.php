@@ -11,6 +11,158 @@ use Illuminate\Http\Request;
 class AccountsReceivableController extends Controller
 {
     /**
+     * Get receivable invoices (facturas a cobrar)
+     */
+    public function getInvoices(Request $request, string $companyId)
+    {
+        try {
+            $company = Company::findOrFail($companyId);
+            
+            $query = Invoice::where('issuer_company_id', $companyId)
+                ->whereNull('supplier_id')
+                ->whereNotIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE', 'NDA', 'NDB', 'NDC', 'NDM', 'NDE']) // Excluir NC/ND
+                ->with([
+                    'client',
+                    'receiverCompany',
+                    'collections',
+                    'creditNotes',
+                    'debitNotes'
+                ]);
+            
+            // Filtros
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function($q) use ($search) {
+                    $q->where('voucher_number', 'like', "%{$search}%")
+                      ->orWhereHas('client', function($q) use ($search) {
+                          $q->where('business_name', 'like', "%{$search}%");
+                      });
+                });
+            }
+            
+            if ($request->has('from_date')) {
+                $query->where('issue_date', '>=', $request->from_date);
+            }
+            
+            if ($request->has('to_date')) {
+                $query->where('issue_date', '<=', $request->to_date);
+            }
+            
+            $invoices = $query->orderByDesc('issue_date')->get();
+            \Log::info('Accounts receivable initial query', ['company_id' => $companyId, 'total_invoices' => $invoices->count()]);
+            
+            // Calcular collection_status y pending_amount dinámicamente
+            $invoices->each(function($invoice) use ($companyId) {
+                // Filtrar colecciones solo de esta empresa (para facturas a cobrar)
+                $collectedAmount = $invoice->collections->where('company_id', $companyId)->sum('amount');
+                
+                // Obtener NC/ND relacionadas
+                $creditNotes = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NCA', 'NCB', 'NCC', 'NCM', 'NCE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
+                    ->get();
+                
+                $debitNotes = Invoice::where('related_invoice_id', $invoice->id)
+                    ->whereIn('type', ['NDA', 'NDB', 'NDC', 'NDM', 'NDE'])
+                    ->where('status', '!=', 'cancelled')
+                    ->select('id', 'type', 'number', 'sales_point', 'voucher_number', 'total', 'issue_date')
+                    ->get();
+                
+                $totalNC = $creditNotes->sum('total');
+                $totalND = $debitNotes->sum('total');
+                
+                $baseTotal = $invoice->total ?? 0;
+                $adjustedTotal = $baseTotal + $totalND - $totalNC; // ND suma, NC resta
+                
+                if ($collectedAmount >= $adjustedTotal) {
+                    $invoice->collection_status = 'collected';
+                } elseif ($collectedAmount > 0) {
+                    $invoice->collection_status = 'partial';
+                } else {
+                    $invoice->collection_status = 'pending';
+                }
+                
+                $invoice->collected_amount = $collectedAmount;
+                $invoice->pending_amount = max(0, $adjustedTotal - $collectedAmount);
+                $invoice->credit_notes_applied = $creditNotes;
+                $invoice->debit_notes_applied = $debitNotes;
+                $invoice->total_nc = $totalNC;
+                $invoice->total_nd = $totalND;
+            });
+            
+            // Filtrar solo facturas no cobradas (excluir cobradas/canceladas)
+            // NO filtrar por pending_amount ya que es global y no refleja el estado por empresa
+            $beforeFilter = $invoices->count();
+            $invoices = $invoices->filter(function($inv) {
+                if ($inv->status === 'cancelled') {
+                    \Log::info('Filtering out cancelled invoice', ['id' => $inv->id, 'status' => $inv->status]);
+                    return false;
+                }
+                if ($inv->collection_status === 'collected') {
+                    \Log::info('Filtering out collected invoice', ['id' => $inv->id, 'collection_status' => $inv->collection_status]);
+                    return false;
+                }
+                return true;
+            })->values();
+            $afterFilter = $invoices->count();
+            \Log::info('Accounts receivable filter results', ['company_id' => $companyId, 'before_filter' => $beforeFilter, 'after_filter' => $afterFilter]);
+            
+            // Paginación manual
+            $page = $request->get('page', 1);
+            $perPage = 20;
+            $total = $invoices->count();
+            $invoices = $invoices->slice(($page - 1) * $perPage, $perPage)->values();
+            
+            // Ensure client and receiverCompany data is included in response
+            $invoicesArray = $invoices->map(function($invoice) {
+                $data = $invoice->toArray();
+                // Explicitly include client data if exists
+                if ($invoice->client) {
+                    $data['client'] = [
+                        'id' => $invoice->client->id,
+                        'document_number' => $invoice->client->document_number,
+                        'business_name' => $invoice->client->business_name,
+                        'first_name' => $invoice->client->first_name,
+                        'last_name' => $invoice->client->last_name,
+                    ];
+                }
+                // Explicitly include receiverCompany data if exists
+                if ($invoice->receiverCompany) {
+                    $data['receiverCompany'] = [
+                        'id' => $invoice->receiverCompany->id,
+                        'business_name' => $invoice->receiverCompany->business_name,
+                        'name' => $invoice->receiverCompany->name,
+                        'national_id' => $invoice->receiverCompany->national_id,
+                    ];
+                }
+                return $data;
+            });
+            
+            return response()->json([
+                'success' => true,
+                'data' => $invoicesArray->toArray(),
+                'pagination' => [
+                    'current_page' => $page,
+                    'last_page' => ceil($total / $perPage),
+                    'per_page' => $perPage,
+                    'total' => $total,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Error in getInvoices: ' . $e->getMessage(), [
+                'company_id' => $companyId,
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return response()->json([
+                'success' => false,
+                'error' => 'Error al cargar facturas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Get accounts receivable (facturas pendientes de cobro)
      */
     public function getBalances(string $companyId)

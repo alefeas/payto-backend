@@ -243,6 +243,16 @@ class InvoiceController extends Controller
             }
             
             // Crear factura (si hay empresa conectada, usar receiver_company_id)
+            // Usar required_approvals de la empresa RECEPTORA (quien necesita aprobar)
+            $requiredApprovals = 0;
+            $initialStatus = 'approved'; // Por defecto, si no hay receptor
+            
+            if ($receiverCompanyId) {
+                $receiverCompany = Company::find($receiverCompanyId);
+                $requiredApprovals = $receiverCompany ? (int)($receiverCompany->required_approvals ?? 0) : 0;
+                $initialStatus = $requiredApprovals === 0 ? 'approved' : 'pending_approval';
+            }
+            
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),
                 'type' => $invoiceType,
@@ -265,10 +275,11 @@ class InvoiceController extends Controller
                 'currency' => $validated['currency'] ?? 'ARS',
                 'exchange_rate' => $validated['exchange_rate'] ?? 1,
                 'notes' => $validated['notes'] ?? null,
-                'status' => 'pending_approval',
+                'status' => $initialStatus,
                 'afip_status' => 'pending',
-                'approvals_required' => 0,
-                'approvals_received' => 0,
+                'approvals_required' => $requiredApprovals,
+                'approvals_received' => $initialStatus === 'approved' ? $requiredApprovals : 0,
+                'approval_date' => $initialStatus === 'approved' ? now() : null,
                 'created_by' => auth()->id(),
             ]);
 
@@ -351,12 +362,21 @@ class InvoiceController extends Controller
                 $afipService = new AfipInvoiceService($company);
                 $afipResult = $afipService->authorizeInvoice($invoice);
                 
-                // Si hay receiver_company_id, el status es issued para emisor pero pending_approval para receptor
+                // Si hay receiver_company_id, el status es issued para emisor pero pending_approval o approved para receptor
                 // Usamos company_statuses JSON para manejar estados por empresa
                 $companyStatuses = [];
                 $companyStatuses[(string)$companyId] = 'issued'; // Emisor ve issued
                 if ($receiverCompanyId) {
-                    $companyStatuses[(string)$receiverCompanyId] = 'pending_approval'; // Receptor ve pending_approval
+                    // Verificar si la empresa receptora requiere aprobaciones
+                    $receiverCompany = Company::find($receiverCompanyId);
+                    $receiverRequiredApprovals = $receiverCompany ? ($receiverCompany->required_approvals ?? 0) : 0;
+                    
+                    // Si no requiere aprobaciones, marcar como approved
+                    if ($receiverRequiredApprovals === 0) {
+                        $companyStatuses[(string)$receiverCompanyId] = 'approved';
+                    } else {
+                        $companyStatuses[(string)$receiverCompanyId] = 'pending_approval';
+                    }
                 }
                 
                 $invoice->update([
@@ -1522,7 +1542,7 @@ class InvoiceController extends Controller
                 'status' => $initialStatus,
                 'afip_status' => $initialAfipStatus,
                 'approvals_required' => $requiredApprovals,
-                'approvals_received' => 0,
+                'approvals_received' => $initialStatus === 'approved' ? $requiredApprovals : 0,
                 'approval_date' => $initialStatus === 'approved' ? now() : null,
                 'afip_cae' => $validated['cae'] ?? null,
                 'afip_cae_due_date' => $validated['cae_due_date'] ?? null,

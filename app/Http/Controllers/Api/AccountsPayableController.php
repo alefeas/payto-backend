@@ -32,8 +32,9 @@ class AccountsPayableController extends Controller
             $allInvoices = $query->get();
         
             // Calcular paid_amount desde payments y considerar NC/ND relacionadas
-            $allInvoices->each(function($invoice) {
-                $invoice->paid_amount = $invoice->payments->sum('amount');
+            $allInvoices->each(function($invoice) use ($companyId) {
+                // Filtrar pagos solo de esta empresa (para facturas a pagar)
+                $invoice->paid_amount = $invoice->payments->where('company_id', $companyId)->sum('amount');
                 
                 // Calcular total ajustado considerando NC/ND relacionadas
                 // Solo contar NC/ND que tengan CAE (fueron autorizadas por AFIP)
