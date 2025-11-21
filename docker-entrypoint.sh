@@ -1,8 +1,7 @@
 #!/bin/bash
-set -e
 
 echo "Running database migrations..."
-php artisan migrate --force
+php artisan migrate --force || true
 
 echo "Starting services..."
 service nginx start
