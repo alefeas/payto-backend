@@ -3,7 +3,13 @@
 return [
     'paths' => ['api/*', 'sanctum/csrf-cookie'],
     'allowed_methods' => ['*'],
-    'allowed_origins' => array_filter(array_map('trim', explode(',', env('FRONTEND_URL', 'http://localhost:3000')))),
+    'allowed_origins' => [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'https://payto.vercel.app',
+        'https://payto-frontend.vercel.app',
+        'https://payto-frontend-git-main-alefeas-projects.vercel.app',
+    ],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
     'exposed_headers' => ['*'],

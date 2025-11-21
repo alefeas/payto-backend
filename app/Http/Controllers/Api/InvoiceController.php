@@ -243,15 +243,8 @@ class InvoiceController extends Controller
             }
             
             // Crear factura (si hay empresa conectada, usar receiver_company_id)
-            // Usar required_approvals de la empresa RECEPTORA (quien necesita aprobar)
-            $requiredApprovals = 0;
-            $initialStatus = 'approved'; // Por defecto, si no hay receptor
-            
-            if ($receiverCompanyId) {
-                $receiverCompany = Company::find($receiverCompanyId);
-                $requiredApprovals = $receiverCompany ? (int)($receiverCompany->required_approvals ?? 0) : 0;
-                $initialStatus = $requiredApprovals === 0 ? 'approved' : 'pending_approval';
-            }
+            $requiredApprovals = (int)($company->required_approvals ?? 0);
+            $initialStatus = $requiredApprovals === 0 ? 'approved' : 'pending_approval';
             
             $invoice = Invoice::create([
                 'number' => sprintf('%04d-%08d', $validated['sales_point'], $voucherNumber),

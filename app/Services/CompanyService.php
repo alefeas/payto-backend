@@ -264,18 +264,23 @@ class CompanyService implements CompanyServiceInterface
         $company->refresh();
 
         // Auto-approve pending invoices based on new required_approvals
-        // Only update invoices where THIS company is the receiver (needs to approve)
         if (isset($data['required_approvals'])) {
             $newRequiredApprovals = (int)$data['required_approvals'];
             
-            // Update all pending invoices received by this company with new requirement
-            \App\Models\Invoice::where('receiver_company_id', $companyId)
+            // Update all pending invoices (both received and issued) with new requirement
+            \App\Models\Invoice::where(function($q) use ($companyId) {
+                    $q->where('receiver_company_id', $companyId)
+                      ->orWhere('issuer_company_id', $companyId);
+                })
                 ->where('status', 'pending_approval')
                 ->update(['approvals_required' => $newRequiredApprovals]);
             
-            // If 0, approve all pending invoices received by this company
+            // If 0, approve all pending invoices
             if ($newRequiredApprovals === 0) {
-                \App\Models\Invoice::where('receiver_company_id', $companyId)
+                \App\Models\Invoice::where(function($q) use ($companyId) {
+                        $q->where('receiver_company_id', $companyId)
+                          ->orWhere('issuer_company_id', $companyId);
+                    })
                     ->where('status', 'pending_approval')
                     ->update([
                         'status' => 'approved',
@@ -283,7 +288,10 @@ class CompanyService implements CompanyServiceInterface
                     ]);
             } else {
                 // If > 0, approve those that already have enough approvals
-                \App\Models\Invoice::where('receiver_company_id', $companyId)
+                \App\Models\Invoice::where(function($q) use ($companyId) {
+                        $q->where('receiver_company_id', $companyId)
+                          ->orWhere('issuer_company_id', $companyId);
+                    })
                     ->where('status', 'pending_approval')
                     ->where('approvals_received', '>=', $newRequiredApprovals)
                     ->update([
