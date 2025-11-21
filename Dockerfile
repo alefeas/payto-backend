@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     zip \
     unzip \
     nginx \
-    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd \
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd soap \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Composer
