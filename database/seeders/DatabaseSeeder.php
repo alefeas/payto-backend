@@ -20,5 +20,8 @@ class DatabaseSeeder extends Seeder
             'last_name' => 'User',
             'email' => 'test@example.com',
         ]);
+
+        // Create testing user for portfolio demonstration
+        $this->call(CreateTestingUserSeeder::class);
     }
 }
