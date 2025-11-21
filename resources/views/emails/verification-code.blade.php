@@ -145,7 +145,6 @@
         
         <div class="footer">
             <img src="{{ url('images/payto.png') }}" alt="PayTo" class="footer-logo">
-            <p>Este es un mensaje automático. Por favor, no respondas a este correo.</p>
             <p>&copy; {{ date('Y') }} Todos los derechos reservados</p>
         </div>
     </div>

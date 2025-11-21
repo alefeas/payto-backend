@@ -39,6 +39,10 @@ return [
         'secret' => env('MAILJET_APISECRET'),
     ],
 
+    'brevo' => [
+        'api_key' => env('BREVO_API_KEY'),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

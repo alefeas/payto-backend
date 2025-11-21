@@ -29,7 +29,9 @@ use App\Services\AuthService;
 use App\Services\CompanyService;
 use App\Services\CompanyMemberService;
 use App\Services\AuditService;
+use App\Mail\Transport\BrevoTransport;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -64,6 +66,11 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Registrar Brevo transport
+        Mail::extend('brevo', function () {
+            return new BrevoTransport(config('services.brevo.api_key'));
+        });
+
         Gate::policy(Client::class, ClientPolicy::class);
         Gate::policy(CompanyConnection::class, CompanyConnectionPolicy::class);
 

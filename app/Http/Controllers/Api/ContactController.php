@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ContactMessage;
-use App\Mail\ContactFormSubmitted;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
@@ -45,10 +44,18 @@ class ContactController extends Controller
             ]);
 
             // Send internal notification email to admin
-            $adminEmail = config('mail.from.address');
-            Mail::to($adminEmail)->send(
-                new ContactFormSubmitted($contactMessage)
-            );
+            try {
+                $htmlContent = view('emails.contact-form-submitted', [
+                    'contactMessage' => $contactMessage,
+                ])->render();
+
+                Mail::html($htmlContent, function ($message) {
+                    $message->to('alefeas99@gmail.com')
+                        ->subject('Nuevo mensaje de contacto - PayTo');
+                });
+            } catch (\Exception $e) {
+                \Log::error('Error sending contact form email', ['error' => $e->getMessage()]);
+            }
 
             return response()->json([
                 'success' => true,

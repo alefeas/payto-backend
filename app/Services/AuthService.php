@@ -41,9 +41,18 @@ class AuthService implements AuthServiceInterface
 
         // Enviar código por email
         $userName = trim(($data['first_name'] ?? '') . ' ' . ($data['last_name'] ?? '')) ?: 'Usuario';
-        Mail::send('emails.verification-code', ['userName' => $userName, 'code' => $code], function ($message) use ($data) {
-            $message->to($data['email'])->subject('Código de verificación - PayTo');
-        });
+        try {
+            $htmlContent = view('emails.verification-code', [
+                'userName' => $userName,
+                'code' => $code,
+            ])->render();
+            Mail::html($htmlContent, function ($message) use ($data) {
+                $message->to($data['email'])
+                    ->subject('Código de verificación - PayTo');
+            });
+        } catch (\Exception $e) {
+            \Log::error('Error sending verification email', ['error' => $e->getMessage()]);
+        }
 
         return [
             'message' => 'Código de verificación enviado a tu email',
@@ -232,9 +241,18 @@ class AuthService implements AuthServiceInterface
         // Enviar nuevo código
         $userData = $pending->user_data ?? [];
         $userName = trim(($userData['first_name'] ?? '') . ' ' . ($userData['last_name'] ?? '')) ?: 'Usuario';
-        Mail::send('emails.verification-code', ['userName' => $userName, 'code' => $code], function ($message) use ($email) {
-            $message->to($email)->subject('Código de verificación - PayTo');
-        });
+        try {
+            $htmlContent = view('emails.verification-code', [
+                'userName' => $userName,
+                'code' => $code,
+            ])->render();
+            Mail::html($htmlContent, function ($message) use ($email) {
+                $message->to($email)
+                    ->subject('Código de verificación - PayTo');
+            });
+        } catch (\Exception $e) {
+            \Log::error('Error sending verification email', ['error' => $e->getMessage()]);
+        }
 
         return true;
     }
@@ -263,9 +281,18 @@ class AuthService implements AuthServiceInterface
         $resetUrl = config('app.frontend_url') . '/reset-password?token=' . $token;
         $userName = trim($user->first_name . ' ' . $user->last_name) ?: 'Usuario';
 
-        Mail::send('emails.reset-password', ['userName' => $userName, 'resetUrl' => $resetUrl], function ($message) use ($user) {
-            $message->to($user->email)->subject('Recuperá tu contraseña - PayTo');
-        });
+        try {
+            $htmlContent = view('emails.reset-password', [
+                'userName' => $userName,
+                'resetUrl' => $resetUrl,
+            ])->render();
+            Mail::html($htmlContent, function ($message) use ($user) {
+                $message->to($user->email)
+                    ->subject('Recuperar contraseña - PayTo');
+            });
+        } catch (\Exception $e) {
+            \Log::error('Error sending password reset email', ['error' => $e->getMessage()]);
+        }
 
         // Auditoría sistema: solicitud de reset de contraseña
         app(\App\Services\SystemAuditService::class)->log(
@@ -342,5 +369,49 @@ class AuthService implements AuthServiceInterface
             'bio' => '',
             'timezone' => '',
         ];
+    }
+
+    private function sendVerificationEmail(string $email, string $userName, string $code): void
+    {
+        try {
+            $brevoService = new BrevoEmailService();
+            $htmlContent = view('emails.verification-code', [
+                'userName' => $userName,
+                'code' => $code,
+            ])->render();
+
+            $brevoService->send(
+                $email,
+                'Código de verificación - PayTo',
+                $htmlContent
+            );
+        } catch (\Exception $e) {
+            \Log::error('Error sending verification email', [
+                'email' => $email,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function sendPasswordResetEmail(string $email, string $userName, string $resetUrl): void
+    {
+        try {
+            $brevoService = new BrevoEmailService();
+            $htmlContent = view('emails.reset-password', [
+                'userName' => $userName,
+                'resetUrl' => $resetUrl,
+            ])->render();
+
+            $brevoService->send(
+                $email,
+                'Recuperar contraseña - PayTo',
+                $htmlContent
+            );
+        } catch (\Exception $e) {
+            \Log::error('Error sending password reset email', [
+                'email' => $email,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

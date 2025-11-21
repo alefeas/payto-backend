@@ -43,6 +43,7 @@ class AuthController extends Controller
     public function login(LoginRequest $request): JsonResponse
     {
         try {
+            \Log::info('Login attempt', ['email' => $request->input('email')]);
             $result = $this->authService->login($request->validated());
             
             return $this->success([
@@ -50,6 +51,12 @@ class AuthController extends Controller
                 'token' => $result['token'],
             ], 'Login successful');
         } catch (\Exception $e) {
+            \Log::error('Login error', [
+                'email' => $request->input('email'),
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ]);
             return $this->unauthorized('Invalid credentials');
         }
     }
