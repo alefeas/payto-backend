@@ -30,8 +30,12 @@ RUN chown -R www-data:www-data /var/www \
 # Copy nginx config
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # Expose port
 EXPOSE 80
 
-# Start nginx and php-fpm
-CMD service nginx start && php-fpm
+# Start with entrypoint script
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
