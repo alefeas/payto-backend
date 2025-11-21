@@ -241,22 +241,30 @@ XML;
      */
     private function signTRA(string $tra): string
     {
-        $certPath = Storage::path($this->certificate->certificate_path);
-        $keyPath = Storage::path($this->certificate->private_key_path);
+        // Read certificate and key directly from database
+        $certContent = $this->certificate->certificate_content;
+        $keyContent = $this->certificate->private_key_content;
 
-        if (!file_exists($certPath) || !file_exists($keyPath)) {
-            throw new \Exception('Certificate or private key file not found');
+        if (!$certContent || !$keyContent) {
+            throw new \Exception('Certificate or private key not found in database');
+        }
+
+        // Decrypt if needed
+        if ($this->certificate->certificate_is_encrypted) {
+            try {
+                $certContent = Crypt::decryptString($certContent);
+            } catch (\Exception $e) {
+                throw new \Exception('Failed to decrypt certificate: ' . $e->getMessage());
+            }
         }
 
         // Verificar que el certificado sea válido
-        $certContent = file_get_contents($certPath);
         $certData = openssl_x509_parse($certContent);
         if (!$certData) {
             throw new \Exception('Invalid certificate file');
         }
 
-        // Leer y desencriptar clave privada si está encriptada
-        $keyContent = file_get_contents($keyPath);
+        // Decrypt private key if needed
         if ($this->certificate->key_is_encrypted) {
             try {
                 $keyContent = Crypt::decryptString($keyContent);
@@ -288,8 +296,12 @@ XML;
 
         $traFile = tempnam(sys_get_temp_dir(), 'tra_');
         $cmsFile = tempnam(sys_get_temp_dir(), 'cms_');
+        $certFile = tempnam(sys_get_temp_dir(), 'cert_');
+        $keyFile = tempnam(sys_get_temp_dir(), 'key_');
         
         file_put_contents($traFile, $tra);
+        file_put_contents($certFile, $certContent);
+        file_put_contents($keyFile, $keyContent);
 
         // Configurar OpenSSL para Windows
         if (DIRECTORY_SEPARATOR === '\\') {
@@ -302,8 +314,8 @@ XML;
         $status = openssl_pkcs7_sign(
             $traFile,
             $cmsFile,
-            "file://{$certPath}",
-            ["file://{$keyPath}", $password],
+            "file://{$certFile}",
+            ["file://{$keyFile}", $password],
             [],
             !PKCS7_DETACHED
         );
@@ -318,6 +330,8 @@ XML;
         
         unlink($traFile);
         unlink($cmsFile);
+        unlink($certFile);
+        unlink($keyFile);
 
         // Extraer solo el contenido BASE64 del CMS
         $cms = str_replace("\r", '', $cms);
