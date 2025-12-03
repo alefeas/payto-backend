@@ -101,14 +101,10 @@ class AfipCertificateController extends Controller
             return response()->json(['error' => 'Error al exportar clave privada'], 500);
         }
         
-        // GUARDAR CSR y clave privada en el sistema
-        $csrPath = "afip/certificates/{$company->id}/csr.pem";
-        $keyPath = "afip/certificates/{$company->id}/private.key";
+        // Encriptar clave privada antes de guardar en BD
+        $encryptedKey = \Crypt::encryptString($privKeyOut);
         
-        \Storage::put($csrPath, $csrOut);
-        \Storage::put($keyPath, $privKeyOut);
-        
-        // Crear o actualizar registro en la base de datos
+        // Crear o actualizar registro en la base de datos (guardar directamente en BD)
         $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
         $preservedToken = [];
         if ($existingCert && $existingCert->current_token && $existingCert->current_sign) {
@@ -119,11 +115,16 @@ class AfipCertificateController extends Controller
             ];
         }
         
+        \Log::info('Saving CSR to database from controller', [
+            'company_id' => $company->id,
+            'key_length' => strlen($encryptedKey),
+        ]);
+        
         CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
             array_merge([
-                'csr_path' => $csrPath,
-                'private_key_path' => $keyPath,
+                'private_key_content' => $encryptedKey,
+                'key_is_encrypted' => true,
                 'is_active' => false,
             ], $preservedToken)
         );

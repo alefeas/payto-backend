@@ -35,85 +35,94 @@ class Handler extends ExceptionHandler
         return parent::render($request, $e);
     }
 
+    private function addCorsHeaders($response)
+    {
+        return $response
+            ->header('Access-Control-Allow-Origin', '*')
+            ->header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
+            ->header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
+            ->header('Access-Control-Max-Age', '86400');
+    }
+
     private function handleApiException($request, Throwable $e)
     {
         if ($e instanceof ValidationException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'Validation error',
                 'errors' => $e->errors(),
-            ], 422);
+            ], 422));
         }
 
         if ($e instanceof AuthenticationException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'No autenticado',
-            ], 401);
+            ], 401));
         }
 
         if ($e instanceof AuthorizationException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'No tienes permisos para realizar esta acción',
-            ], 403);
+            ], 403));
         }
 
         if ($e instanceof UnauthorizedException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
-            ], 401);
+            ], 401));
         }
 
         if ($e instanceof ForbiddenException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
-            ], 403);
+            ], 403));
         }
 
         if ($e instanceof BadRequestException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
-            ], 400);
+            ], 400));
         }
 
         if ($e instanceof NotFoundException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
-            ], 404);
+            ], 404));
         }
 
         if ($e instanceof ModelNotFoundException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'Resource not found',
-            ], 404);
+            ], 404));
         }
 
         if ($e instanceof NotFoundHttpException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'Endpoint not found',
-            ], 404);
+            ], 404));
         }
 
         if ($e instanceof MethodNotAllowedHttpException) {
-            return response()->json([
+            return $this->addCorsHeaders(response()->json([
                 'success' => false,
                 'message' => 'Method not allowed',
-            ], 405);
+            ], 405));
         }
 
         $statusCode = method_exists($e, 'getStatusCode') ? $e->getStatusCode() : 500;
 
-        return response()->json([
+        return $this->addCorsHeaders(response()->json([
             'success' => false,
             'message' => config('app.debug') ? $e->getMessage() : 'Server error',
             'trace' => config('app.debug') ? $e->getTrace() : null,
-        ], $statusCode);
+        ], $statusCode));
     }
 }

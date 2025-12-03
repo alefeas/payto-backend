@@ -69,34 +69,28 @@ class AfipCertificateService
             throw new \Exception('Error al exportar clave privada.');
         }
 
-        // Guardar archivos
-        $csrPath = "afip/certificates/{$company->id}/csr.pem";
-        $keyPath = "afip/certificates/{$company->id}/private.key";
-
-        Storage::put($csrPath, $csrOut);
-        
-        // Encriptar clave privada antes de guardar
+        // Encriptar clave privada antes de guardar en BD
         $encryptedKey = Crypt::encryptString($privateKeyOut);
-        Storage::put($keyPath, $encryptedKey);
 
-        // Actualizar o crear registro
-        $certificate = CompanyAfipCertificate::where('company_id', $company->id)->first();
-        
-        if ($certificate) {
-            $certificate->update([
-                'csr_path' => $csrPath,
-                'private_key_path' => $keyPath,
-                'key_is_encrypted' => true,
-            ]);
-        } else {
-            $certificate = CompanyAfipCertificate::create([
-                'company_id' => $company->id,
-                'csr_path' => $csrPath,
-                'private_key_path' => $keyPath,
+        \Log::info('Saving CSR to database', [
+            'company_id' => $company->id,
+            'key_length' => strlen($encryptedKey),
+        ]);
+
+        // Actualizar o crear registro (guardar directamente en BD)
+        $certificate = CompanyAfipCertificate::updateOrCreate(
+            ['company_id' => $company->id],
+            [
+                'private_key_content' => $encryptedKey,
                 'key_is_encrypted' => true,
                 'is_active' => false,
-            ]);
-        }
+            ]
+        );
+
+        \Log::info('CSR saved successfully', [
+            'certificate_id' => $certificate->id,
+            'has_private_key' => !empty($certificate->private_key_content),
+        ]);
 
         return [
             'csr' => $csrOut,
@@ -149,53 +143,40 @@ class AfipCertificateService
             throw new \Exception("El CUIT del certificado ($certCuit) no coincide con el CUIT de la empresa ($companyCuit)");
         }
 
-        // VALIDACIÓN: Debe existir CSR y clave privada del flujo asistido
+        // VALIDACIÓN: Debe existir clave privada del flujo asistido
         $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
         
-        if (!$existingCert || !$existingCert->csr_path || !Storage::exists($existingCert->csr_path)) {
+        if (!$existingCert || !$existingCert->private_key_content) {
             throw new \Exception('Primero debes generar un CSR haciendo clic en "Generar CSR", o usa el método Manual para subir certificado y clave privada juntos.');
         }
         
-        if (!$existingCert->private_key_path || !Storage::exists($existingCert->private_key_path)) {
-            throw new \Exception('No hay una clave privada generada. Debes generar un nuevo CSR o usar el método manual.');
+        // Desencriptar clave privada para validación
+        $privateKeyContent = $existingCert->key_is_encrypted 
+            ? Crypt::decryptString($existingCert->private_key_content)
+            : $existingCert->private_key_content;
+            
+        $privKey = openssl_pkey_get_private($privateKeyContent);
+        if (!$privKey) {
+            throw new \Exception('No se pudo leer la clave privada almacenada.');
         }
         
-        // Extraer clave pública del CSR
-        $csrContent = Storage::get($existingCert->csr_path);
-        $csrPubKey = openssl_csr_get_public_key($csrContent);
-        
-        if (!$csrPubKey) {
-            throw new \Exception('No se pudo extraer la clave pública del CSR.');
-        }
-        
-        $csrDetails = openssl_pkey_get_details($csrPubKey);
-        
-        // Extraer clave pública del certificado
+        // Validar que el certificado y la clave privada coincidan
         $certPubKey = openssl_pkey_get_public($certificateContent);
         if (!$certPubKey) {
             throw new \Exception('No se pudo leer la clave pública del certificado.');
         }
         
-        $certDetails = openssl_pkey_get_details($certPubKey);
+        $pubDetails = openssl_pkey_get_details($certPubKey);
+        $privDetails = openssl_pkey_get_details($privKey);
         
-        if (!$csrDetails || !$certDetails) {
+        if (!$pubDetails || !$privDetails) {
             throw new \Exception('Error al validar las claves.');
         }
         
-        // Comparar módulos RSA
-        $csrModulus = $csrDetails['rsa']['n'] ?? null;
-        $certModulus = $certDetails['rsa']['n'] ?? null;
-        
-        if (!$csrModulus || !$certModulus) {
-            throw new \Exception('No se pudieron extraer los módulos RSA para validación.');
+        // Comparar las claves públicas
+        if ($pubDetails['key'] !== $privDetails['key']) {
+            throw new \Exception('El certificado no coincide con la clave privada almacenada. Usa el método Manual para subir certificado y clave privada juntos.');
         }
-        
-        if ($csrModulus !== $certModulus) {
-            throw new \Exception('El certificado no coincide con el CSR generado. Genera un nuevo certificado en AFIP usando el CSR actual, o usa el método Manual.');
-        }
-        
-        $certPath = "afip/certificates/{$company->id}/certificate.crt";
-        Storage::put($certPath, $certificateContent);
         
         // Preservar token si existe
         $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
@@ -208,10 +189,12 @@ class AfipCertificateService
             ];
         }
         
+        // Guardar directamente en BD (sin storage)
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
             array_merge([
-                'certificate_path' => $certPath,
+                'certificate_content' => $certificateContent,
+                'certificate_is_encrypted' => false,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
                 'valid_until' => date('Y-m-d', $certData['validTo_time_t']),
@@ -314,14 +297,8 @@ class AfipCertificateService
             throw new \Exception('El certificado y la clave privada no coinciden');
         }
         
-        $certPath = "afip/certificates/{$company->id}/certificate.crt";
-        $keyPath = "afip/certificates/{$company->id}/private.key";
-
-        Storage::put($certPath, $certificateContent);
-        
-        // Encriptar clave privada antes de guardar
+        // Encriptar clave privada antes de guardar en BD
         $encryptedKey = Crypt::encryptString($privateKeyContent);
-        Storage::put($keyPath, $encryptedKey);
 
         // Preservar token si existe
         $existingCert = CompanyAfipCertificate::where('company_id', $company->id)->first();
@@ -334,11 +311,13 @@ class AfipCertificateService
             ];
         }
 
+        // Guardar directamente en BD (sin storage)
         $certificate = CompanyAfipCertificate::updateOrCreate(
             ['company_id' => $company->id],
             array_merge([
-                'certificate_path' => $certPath,
-                'private_key_path' => $keyPath,
+                'certificate_content' => $certificateContent,
+                'private_key_content' => $encryptedKey,
+                'certificate_is_encrypted' => false,
                 'key_is_encrypted' => true,
                 'encrypted_password' => $password ? Crypt::encryptString($password) : null,
                 'valid_from' => date('Y-m-d', $certData['validFrom_time_t']),
@@ -382,16 +361,6 @@ class AfipCertificateService
         
         if (!$certificate) {
             return false;
-        }
-
-        if ($certificate->certificate_path) {
-            Storage::delete($certificate->certificate_path);
-        }
-        if ($certificate->private_key_path) {
-            Storage::delete($certificate->private_key_path);
-        }
-        if ($certificate->csr_path) {
-            Storage::delete($certificate->csr_path);
         }
 
         $id = (string) $certificate->id;
